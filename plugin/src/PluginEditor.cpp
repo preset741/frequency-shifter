@@ -3,6 +3,167 @@
 #include <cmath>
 
 //==============================================================================
+// SpectrumAnalyzer Implementation
+//==============================================================================
+
+SpectrumAnalyzer::SpectrumAnalyzer(FrequencyShifterProcessor& processor)
+    : audioProcessor(processor)
+{
+    startTimerHz(30);  // 30 FPS refresh rate
+}
+
+SpectrumAnalyzer::~SpectrumAnalyzer()
+{
+    stopTimer();
+}
+
+void SpectrumAnalyzer::timerCallback()
+{
+    if (audioProcessor.getSpectrumData(spectrumData))
+    {
+        // Apply smoothing for visual appeal
+        for (size_t i = 0; i < SPECTRUM_SIZE; ++i)
+        {
+            smoothedData[i] = smoothedData[i] * smoothingFactor + spectrumData[i] * (1.0f - smoothingFactor);
+        }
+        repaint();
+    }
+    else
+    {
+        // Decay when no new data
+        bool needsRepaint = false;
+        for (size_t i = 0; i < SPECTRUM_SIZE; ++i)
+        {
+            if (smoothedData[i] > 0.001f)
+            {
+                smoothedData[i] *= 0.95f;
+                needsRepaint = true;
+            }
+        }
+        if (needsRepaint)
+            repaint();
+    }
+}
+
+void SpectrumAnalyzer::paint(juce::Graphics& g)
+{
+    const auto bounds = getLocalBounds().toFloat();
+    const float width = bounds.getWidth();
+    const float height = bounds.getHeight();
+
+    // Background
+    g.setColour(juce::Colour(backgroundColor));
+    g.fillRoundedRectangle(bounds, 6.0f);
+
+    // Draw grid lines
+    g.setColour(juce::Colour(gridColor));
+
+    // Horizontal grid lines (dB levels)
+    for (int db = -80; db <= 0; db += 20)
+    {
+        float y = height * (1.0f - (db + 100.0f) / 100.0f);
+        g.drawHorizontalLine(static_cast<int>(y), 0.0f, width);
+    }
+
+    // Get frequency info
+    const double sampleRate = audioProcessor.getSampleRate();
+    const int fftSize = audioProcessor.getCurrentFFTSize();
+    const int numBins = fftSize / 2;
+
+    // Frequency labels (logarithmic scale)
+    g.setColour(juce::Colour(textColor));
+    g.setFont(juce::FontOptions(9.0f));
+
+    const std::array<float, 6> freqLabels = { 100.0f, 500.0f, 1000.0f, 2000.0f, 5000.0f, 10000.0f };
+    for (float freq : freqLabels)
+    {
+        if (freq < sampleRate / 2.0)
+        {
+            // Log scale mapping: x = log(f/fMin) / log(fMax/fMin)
+            const float fMin = 20.0f;
+            const float fMax = static_cast<float>(sampleRate / 2.0);
+            float x = std::log(freq / fMin) / std::log(fMax / fMin) * width;
+
+            g.setColour(juce::Colour(gridColor));
+            g.drawVerticalLine(static_cast<int>(x), 0.0f, height);
+
+            g.setColour(juce::Colour(textColor));
+            juce::String label = freq >= 1000.0f
+                ? juce::String(static_cast<int>(freq / 1000)) + "k"
+                : juce::String(static_cast<int>(freq));
+            g.drawText(label, static_cast<int>(x) - 15, static_cast<int>(height) - 12, 30, 12,
+                       juce::Justification::centred, false);
+        }
+    }
+
+    // Draw spectrum
+    if (numBins > 0)
+    {
+        juce::Path spectrumPath;
+        juce::Path fillPath;
+
+        const float fMin = 20.0f;
+        const float fMax = static_cast<float>(sampleRate / 2.0);
+        const float binWidth = static_cast<float>(sampleRate) / static_cast<float>(fftSize);
+
+        bool pathStarted = false;
+
+        for (int bin = 1; bin < std::min(numBins, SPECTRUM_SIZE); ++bin)
+        {
+            float binFreq = static_cast<float>(bin) * binWidth;
+
+            // Skip bins below minimum frequency
+            if (binFreq < fMin)
+                continue;
+
+            // Log scale x position
+            float x = std::log(binFreq / fMin) / std::log(fMax / fMin) * width;
+
+            // Get magnitude (clamped)
+            float magnitude = smoothedData[static_cast<size_t>(bin)];
+            float y = height * (1.0f - magnitude);
+
+            if (!pathStarted)
+            {
+                spectrumPath.startNewSubPath(x, y);
+                fillPath.startNewSubPath(x, height);
+                fillPath.lineTo(x, y);
+                pathStarted = true;
+            }
+            else
+            {
+                spectrumPath.lineTo(x, y);
+                fillPath.lineTo(x, y);
+            }
+        }
+
+        // Complete fill path
+        if (pathStarted)
+        {
+            fillPath.lineTo(width, height);
+            fillPath.closeSubPath();
+
+            // Draw filled area
+            g.setColour(juce::Colour(spectrumFillColor));
+            g.fillPath(fillPath);
+
+            // Draw spectrum line
+            g.setColour(juce::Colour(spectrumColor));
+            g.strokePath(spectrumPath, juce::PathStrokeType(1.5f));
+        }
+    }
+
+    // Border
+    g.setColour(juce::Colour(gridColor));
+    g.drawRoundedRectangle(bounds.reduced(0.5f), 6.0f, 1.0f);
+}
+
+void SpectrumAnalyzer::resized()
+{
+    // Nothing special needed
+}
+
+//==============================================================================
 // ModernLookAndFeel Implementation
 //==============================================================================
 
@@ -217,6 +378,28 @@ FrequencyShifterEditor::FrequencyShifterEditor(FrequencyShifterProcessor& p)
     // Add slider listener for manual sync in log mode
     shiftSlider.addListener(this);
 
+    // Setup spectrum analyzer toggle
+    spectrumButton.setButtonText("Spectrum");
+    spectrumButton.setColour(juce::ToggleButton::textColourId, juce::Colour(Colors::text));
+    spectrumButton.onClick = [this]()
+    {
+        spectrumVisible = spectrumButton.getToggleState();
+        if (spectrumVisible && !spectrumAnalyzer)
+        {
+            spectrumAnalyzer = std::make_unique<SpectrumAnalyzer>(audioProcessor);
+            addAndMakeVisible(*spectrumAnalyzer);
+        }
+        if (spectrumAnalyzer)
+            spectrumAnalyzer->setVisible(spectrumVisible);
+
+        // Resize window when spectrum is toggled
+        if (spectrumVisible)
+            setSize(500, 520);
+        else
+            setSize(500, 400);
+    };
+    addAndMakeVisible(spectrumButton);
+
     // Set editor size
     setSize(500, 400);
 }
@@ -275,6 +458,12 @@ void FrequencyShifterEditor::paint(juce::Graphics& g)
 
     // Mix panel
     g.fillRoundedRectangle(20.0f, 280.0f, 460.0f, 100.0f, 10.0f);
+
+    // Spectrum panel (when visible)
+    if (spectrumVisible)
+    {
+        g.fillRoundedRectangle(20.0f, 390.0f, 460.0f, 120.0f, 10.0f);
+    }
 }
 
 void FrequencyShifterEditor::resized()
@@ -305,14 +494,21 @@ void FrequencyShifterEditor::resized()
 
     // Mix controls - bottom panel
     dryWetLabel.setBounds(40, 305, 60, 20);
-    dryWetSlider.setBounds(100, 303, 360, 24);
+    dryWetSlider.setBounds(100, 303, 260, 24);
+    spectrumButton.setBounds(370, 303, 100, 24);
+
+    // Spectrum analyzer (below main controls when visible)
+    if (spectrumAnalyzer && spectrumVisible)
+    {
+        spectrumAnalyzer->setBounds(20, 395, 460, 110);
+    }
 }
 
 // Symmetric log transform: sign(x) * log(1 + |x|/scale) / log(1 + max/scale)
 // This gives fine control near 0 and coarser control at extremes
-// Scale of 10 means: 0-10 Hz uses about half the knob travel from center
+// Scale of 10 means: 0-10 Hz uses about 1/6 of the knob travel from center
 static constexpr double LOG_SCALE = 10.0;
-static constexpr double MAX_SHIFT = 2000.0;
+static constexpr double MAX_SHIFT = 20000.0;
 
 static double symLogTransform(double value)
 {
@@ -345,8 +541,8 @@ void FrequencyShifterEditor::sliderValueChanged(juce::Slider* slider)
         auto* param = audioProcessor.getValueTreeState().getParameter(FrequencyShifterProcessor::PARAM_SHIFT_HZ);
         if (param != nullptr)
         {
-            // Convert to normalized 0-1 range for the parameter
-            float normalized = (value + 2000.0f) / 4000.0f;
+            // Convert to normalized 0-1 range for the parameter (-20000 to +20000)
+            float normalized = (value + 20000.0f) / 40000.0f;
             param->setValueNotifyingHost(normalized);
         }
     }
@@ -366,8 +562,8 @@ void FrequencyShifterEditor::updateShiftSliderRange()
     float currentValue = 0.0f;
     if (param != nullptr)
     {
-        // Denormalize from 0-1 to -2000..2000
-        currentValue = param->getValue() * 4000.0f - 2000.0f;
+        // Denormalize from 0-1 to -20000..20000
+        currentValue = param->getValue() * 40000.0f - 20000.0f;
     }
 
     if (newLogMode)
@@ -408,7 +604,7 @@ void FrequencyShifterEditor::updateShiftSliderRange()
         // Switching TO linear mode
         // First set linear range
         shiftSlider.setNormalisableRange(
-            juce::NormalisableRange<double>(-2000.0, 2000.0, 0.1));
+            juce::NormalisableRange<double>(-20000.0, 20000.0, 1.0));
 
         // Restore value before reattaching
         shiftSlider.setValue(currentValue, juce::dontSendNotification);

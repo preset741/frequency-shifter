@@ -6,6 +6,9 @@
 #include "dsp/FrequencyShifter.h"
 #include "dsp/MusicalQuantizer.h"
 
+// Size of spectrum data for visualization (half of max FFT size)
+static constexpr int SPECTRUM_SIZE = 2048;
+
 /**
  * FrequencyShifterProcessor - Main audio processor for the Frequency Shifter plugin.
  *
@@ -75,6 +78,12 @@ public:
     // Get current latency in samples
     int getLatencySamples() const;
 
+    // Spectrum data access for visualization
+    // Returns true if new data is available
+    bool getSpectrumData(std::array<float, SPECTRUM_SIZE>& data);
+    double getSampleRate() const { return currentSampleRate; }
+    int getCurrentFFTSize() const { return currentFftSize; }
+
 private:
     // Create parameter layout
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
@@ -120,6 +129,11 @@ private:
     std::array<std::vector<float>, MAX_CHANNELS> outputBuffers;
     std::array<int, MAX_CHANNELS> inputWritePos{};
     std::array<int, MAX_CHANNELS> outputReadPos{};
+
+    // Spectrum visualization data (thread-safe FIFO)
+    std::array<float, SPECTRUM_SIZE> spectrumData{};
+    std::atomic<bool> spectrumDataReady{ false };
+    juce::SpinLock spectrumLock;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(FrequencyShifterProcessor)
 };

@@ -36,11 +36,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout FrequencyShifterProcessor::c
 {
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
 
-    // Frequency shift (-2000 to +2000 Hz)
+    // Frequency shift (-20000 to +20000 Hz) - covers full audible range
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID{ PARAM_SHIFT_HZ, 1 },
         "Shift (Hz)",
-        juce::NormalisableRange<float>(-2000.0f, 2000.0f, 0.1f),
+        juce::NormalisableRange<float>(-20000.0f, 20000.0f, 0.1f),
         0.0f,
         juce::AudioParameterFloatAttributes().withLabel("Hz")));
 
@@ -311,6 +311,22 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
                         magnitude, phase, currentSampleRate, fftSize, currentQuantizeStrength);
                 }
 
+                // Store spectrum data for visualization (only from first channel)
+                if (channel == 0)
+                {
+                    const juce::SpinLock::ScopedLockType lock(spectrumLock);
+                    const int numBins = std::min(static_cast<int>(magnitude.size()), SPECTRUM_SIZE);
+                    for (int bin = 0; bin < numBins; ++bin)
+                    {
+                        // Convert to dB with smoothing
+                        float magDb = juce::Decibels::gainToDecibels(magnitude[static_cast<size_t>(bin)], -100.0f);
+                        // Normalize to 0-1 range (-100dB to 0dB)
+                        float normalized = (magDb + 100.0f) / 100.0f;
+                        spectrumData[static_cast<size_t>(bin)] = std::max(0.0f, std::min(1.0f, normalized));
+                    }
+                    spectrumDataReady.store(true);
+                }
+
                 // Perform inverse STFT
                 auto outputFrame = stftProcessors[channel]->inverse(magnitude, phase);
 
@@ -370,6 +386,17 @@ void FrequencyShifterProcessor::setStateInformation(const void* data, int sizeIn
     {
         parameters.replaceState(juce::ValueTree::fromXml(*xmlState));
     }
+}
+
+bool FrequencyShifterProcessor::getSpectrumData(std::array<float, SPECTRUM_SIZE>& data)
+{
+    if (!spectrumDataReady.load())
+        return false;
+
+    const juce::SpinLock::ScopedLockType lock(spectrumLock);
+    data = spectrumData;
+    spectrumDataReady.store(false);
+    return true;
 }
 
 // Plugin instantiation
