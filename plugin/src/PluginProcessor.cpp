@@ -52,20 +52,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout FrequencyShifterProcessor::c
         0.0f,
         juce::AudioParameterFloatAttributes().withLabel("%")));
 
-    // Root note (C0 to B8, MIDI 12-119)
-    juce::StringArray noteNames;
-    for (int octave = 0; octave <= 8; ++octave)
-    {
-        for (const auto& note : { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" })
-        {
-            noteNames.add(juce::String(note) + juce::String(octave));
-        }
-    }
+    // Root note (12 pitch classes only - octave is irrelevant for scale quantization)
+    juce::StringArray noteNames{ "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
     params.push_back(std::make_unique<juce::AudioParameterChoice>(
         juce::ParameterID{ PARAM_ROOT_NOTE, 1 },
         "Root Note",
         noteNames,
-        48));  // Default to C4 (index 48 = MIDI 60)
+        0));  // Default to C
 
     // Scale type
     juce::StringArray scaleNames;
@@ -100,6 +93,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout FrequencyShifterProcessor::c
         juce::StringArray{ "Low Latency", "Balanced", "Quality" },
         2));  // Default to Quality mode
 
+    // Log scale toggle for frequency shift control
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID{ PARAM_LOG_SCALE, 1 },
+        "Log Scale",
+        false));  // Default to linear
+
     return { params.begin(), params.end() };
 }
 
@@ -115,7 +114,8 @@ void FrequencyShifterProcessor::parameterChanged(const juce::String& parameterID
     }
     else if (parameterID == PARAM_ROOT_NOTE)
     {
-        int midiNote = static_cast<int>(newValue) + 12;  // Convert index to MIDI (C0 = 12)
+        // Index is now 0-11 (pitch class), use middle octave (C4=60) as reference
+        int midiNote = static_cast<int>(newValue) + 60;  // C=60, C#=61, ..., B=71
         rootNote.store(midiNote);
         if (quantizer)
         {

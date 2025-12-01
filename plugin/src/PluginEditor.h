@@ -18,7 +18,8 @@
  * - Uses JUCE's LookAndFeel for consistent styling
  * - All controls are attached to AudioProcessorValueTreeState parameters
  */
-class FrequencyShifterEditor : public juce::AudioProcessorEditor
+class FrequencyShifterEditor : public juce::AudioProcessorEditor,
+                               private juce::Slider::Listener
 {
 public:
     explicit FrequencyShifterEditor(FrequencyShifterProcessor& processor);
@@ -88,6 +89,17 @@ private:
     juce::ComboBox qualityModeCombo;
     juce::Label qualityModeLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> qualityModeAttachment;
+
+    // Log scale toggle for frequency shift
+    juce::ToggleButton logScaleButton;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> logScaleAttachment;
+
+    // Manual sync for log mode (SliderAttachment doesn't support custom ranges)
+    bool isLogModeActive = false;
+    void sliderValueChanged(juce::Slider* slider) override;
+
+    // Update slider range based on log/linear mode
+    void updateShiftSliderRange();
 
     // UI colors (for easy customization)
     struct Colors

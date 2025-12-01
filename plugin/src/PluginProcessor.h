@@ -62,6 +62,7 @@ public:
     static constexpr const char* PARAM_DRY_WET = "dryWet";
     static constexpr const char* PARAM_PHASE_VOCODER = "phaseVocoder";
     static constexpr const char* PARAM_QUALITY_MODE = "qualityMode";
+    static constexpr const char* PARAM_LOG_SCALE = "logScale";
 
     // Quality mode enum - controls FFT size / latency tradeoff
     enum class QualityMode
