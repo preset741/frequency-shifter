@@ -16,6 +16,9 @@ FrequencyShifterProcessor::FrequencyShifterProcessor()
     parameters.addParameterListener(PARAM_DRY_WET, this);
     parameters.addParameterListener(PARAM_PHASE_VOCODER, this);
     parameters.addParameterListener(PARAM_QUALITY_MODE, this);
+    parameters.addParameterListener(PARAM_DRIFT_AMOUNT, this);
+    parameters.addParameterListener(PARAM_DRIFT_RATE, this);
+    parameters.addParameterListener(PARAM_DRIFT_MODE, this);
 
     // Initialize quantizer with default scale (C Major)
     quantizer = std::make_unique<fshift::MusicalQuantizer>(60, fshift::ScaleType::Major);
@@ -30,6 +33,9 @@ FrequencyShifterProcessor::~FrequencyShifterProcessor()
     parameters.removeParameterListener(PARAM_DRY_WET, this);
     parameters.removeParameterListener(PARAM_PHASE_VOCODER, this);
     parameters.removeParameterListener(PARAM_QUALITY_MODE, this);
+    parameters.removeParameterListener(PARAM_DRIFT_AMOUNT, this);
+    parameters.removeParameterListener(PARAM_DRIFT_RATE, this);
+    parameters.removeParameterListener(PARAM_DRIFT_MODE, this);
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout FrequencyShifterProcessor::createParameterLayout()
@@ -44,11 +50,24 @@ juce::AudioProcessorValueTreeState::ParameterLayout FrequencyShifterProcessor::c
         0.0f,
         juce::AudioParameterFloatAttributes().withLabel("Hz")));
 
-    // Quantize strength (0-100%)
+    // Quantize strength (0-100%) with log scale for fine control near 0
+    auto quantizeRange = juce::NormalisableRange<float>(0.0f, 100.0f,
+        [](float start, float end, float normalised) {
+            // Log scale: more resolution near 0
+            return start + std::pow(normalised, 2.0f) * (end - start);
+        },
+        [](float start, float end, float value) {
+            // Inverse: value to normalised
+            return std::sqrt((value - start) / (end - start));
+        },
+        [](float start, float end, float value) {
+            // Snap to 0.1 resolution
+            return std::round(value * 10.0f) / 10.0f;
+        });
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID{ PARAM_QUANTIZE_STRENGTH, 1 },
         "Quantize",
-        juce::NormalisableRange<float>(0.0f, 100.0f, 0.1f),
+        quantizeRange,
         0.0f,
         juce::AudioParameterFloatAttributes().withLabel("%")));
 
@@ -99,6 +118,37 @@ juce::AudioProcessorValueTreeState::ParameterLayout FrequencyShifterProcessor::c
         "Log Scale",
         false));  // Default to linear
 
+    // Drift amount (0-100%) - how much pitch drift to apply
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID{ PARAM_DRIFT_AMOUNT, 1 },
+        "Drift",
+        juce::NormalisableRange<float>(0.0f, 100.0f, 0.1f),
+        0.0f,
+        juce::AudioParameterFloatAttributes().withLabel("%")));
+
+    // Drift rate (0.1-10 Hz) - speed of pitch drift modulation
+    auto driftRateRange = juce::NormalisableRange<float>(0.1f, 10.0f,
+        [](float start, float end, float normalised) {
+            // Log scale for rate
+            return start * std::pow(end / start, normalised);
+        },
+        [](float start, float end, float value) {
+            return std::log(value / start) / std::log(end / start);
+        });
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID{ PARAM_DRIFT_RATE, 1 },
+        "Drift Rate",
+        driftRateRange,
+        1.0f,
+        juce::AudioParameterFloatAttributes().withLabel("Hz")));
+
+    // Drift mode (LFO or Perlin noise)
+    params.push_back(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID{ PARAM_DRIFT_MODE, 1 },
+        "Drift Mode",
+        juce::StringArray{ "LFO", "Perlin" },
+        0));  // Default to LFO
+
     return { params.begin(), params.end() };
 }
 
@@ -147,6 +197,22 @@ void FrequencyShifterProcessor::parameterChanged(const juce::String& parameterID
             qualityMode.store(mode);
             needsReinit.store(true);
         }
+    }
+    else if (parameterID == PARAM_DRIFT_AMOUNT)
+    {
+        driftAmount.store(newValue / 100.0f);
+        driftModulator.setDepth(newValue / 100.0f);
+    }
+    else if (parameterID == PARAM_DRIFT_RATE)
+    {
+        driftRate.store(newValue);
+        driftModulator.setRate(newValue);
+    }
+    else if (parameterID == PARAM_DRIFT_MODE)
+    {
+        int mode = static_cast<int>(newValue);
+        driftMode.store(mode);
+        driftModulator.setMode(mode == 0 ? fshift::DriftModulator::Mode::LFO : fshift::DriftModulator::Mode::Perlin);
     }
 }
 
@@ -199,6 +265,10 @@ void FrequencyShifterProcessor::reinitializeDsp()
         outputReadPos[ch] = 0;
     }
 
+    // Prepare drift modulator
+    driftModulator.prepare(currentSampleRate, currentFftSize / 2);
+    driftModulator.reset();
+
     // Update latency reporting
     setLatencySamples(getLatencySamples());
     needsReinit.store(false);
@@ -248,6 +318,7 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
     const float currentQuantizeStrength = quantizeStrength.load();
     const float currentDryWet = dryWetMix.load();
     const bool currentUsePhaseVocoder = usePhaseVocoder.load();
+    const float currentDriftAmount = driftAmount.load();
 
     // Cache current FFT settings for this block
     const int fftSize = currentFftSize;
@@ -304,11 +375,32 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
                     std::tie(magnitude, phase) = frequencyShifters[channel]->shift(magnitude, phase, currentShiftHz);
                 }
 
-                // Apply musical quantization
+                // Apply musical quantization with optional drift
                 if (currentQuantizeStrength > 0.01f && quantizer)
                 {
+                    // Generate drift values if drift is enabled
+                    std::vector<float> driftCentsVec;
+                    const std::vector<float>* driftPtr = nullptr;
+
+                    if (currentDriftAmount > 0.01f)
+                    {
+                        const int numBins = fftSize / 2;
+                        driftCentsVec.resize(static_cast<size_t>(numBins));
+                        for (int bin = 0; bin < numBins; ++bin)
+                        {
+                            driftCentsVec[static_cast<size_t>(bin)] = driftModulator.getDrift(bin);
+                        }
+                        driftPtr = &driftCentsVec;
+
+                        // Advance drift modulator for next frame (only once per channel 0)
+                        if (channel == 0)
+                        {
+                            driftModulator.advanceFrame(hopSize);
+                        }
+                    }
+
                     std::tie(magnitude, phase) = quantizer->quantizeSpectrum(
-                        magnitude, phase, currentSampleRate, fftSize, currentQuantizeStrength);
+                        magnitude, phase, currentSampleRate, fftSize, currentQuantizeStrength, driftPtr);
                 }
 
                 // Store spectrum data for visualization (only from first channel)

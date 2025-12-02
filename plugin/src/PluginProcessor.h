@@ -5,6 +5,7 @@
 #include "dsp/PhaseVocoder.h"
 #include "dsp/FrequencyShifter.h"
 #include "dsp/MusicalQuantizer.h"
+#include "dsp/DriftModulator.h"
 
 // Size of spectrum data for visualization (half of max FFT size)
 static constexpr int SPECTRUM_SIZE = 2048;
@@ -66,6 +67,9 @@ public:
     static constexpr const char* PARAM_PHASE_VOCODER = "phaseVocoder";
     static constexpr const char* PARAM_QUALITY_MODE = "qualityMode";
     static constexpr const char* PARAM_LOG_SCALE = "logScale";
+    static constexpr const char* PARAM_DRIFT_AMOUNT = "driftAmount";
+    static constexpr const char* PARAM_DRIFT_RATE = "driftRate";
+    static constexpr const char* PARAM_DRIFT_MODE = "driftMode";
 
     // Quality mode enum - controls FFT size / latency tradeoff
     enum class QualityMode
@@ -100,6 +104,7 @@ private:
     std::array<std::unique_ptr<fshift::PhaseVocoder>, MAX_CHANNELS> phaseVocoders;
     std::array<std::unique_ptr<fshift::FrequencyShifter>, MAX_CHANNELS> frequencyShifters;
     std::unique_ptr<fshift::MusicalQuantizer> quantizer;
+    fshift::DriftModulator driftModulator;
 
     // Processing parameters (atomic for thread safety)
     std::atomic<float> shiftHz{ 0.0f };
@@ -109,6 +114,9 @@ private:
     std::atomic<int> rootNote{ 60 };  // C4
     std::atomic<int> scaleType{ 0 };  // Major
     std::atomic<int> qualityMode{ static_cast<int>(QualityMode::Quality) };
+    std::atomic<float> driftAmount{ 0.0f };
+    std::atomic<float> driftRate{ 1.0f };
+    std::atomic<int> driftMode{ 0 };  // 0 = LFO, 1 = Perlin
 
     // Processing state
     double currentSampleRate = 44100.0;

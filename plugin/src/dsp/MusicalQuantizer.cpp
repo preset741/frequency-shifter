@@ -57,12 +57,21 @@ std::vector<float> MusicalQuantizer::quantizeFrequencies(const std::vector<float
     return quantized;
 }
 
+float MusicalQuantizer::applyDriftCents(float frequency, float cents)
+{
+    // Convert cents to frequency ratio: ratio = 2^(cents/1200)
+    // 100 cents = 1 semitone, 1200 cents = 1 octave
+    float ratio = std::pow(2.0f, cents / 1200.0f);
+    return frequency * ratio;
+}
+
 std::pair<std::vector<float>, std::vector<float>> MusicalQuantizer::quantizeSpectrum(
     const std::vector<float>& magnitude,
     const std::vector<float>& phase,
     double sampleRate,
     int fftSize,
-    float strength)
+    float strength,
+    const std::vector<float>* driftCents)
 {
     if (strength <= 0.0f)
         return { magnitude, phase };
@@ -88,6 +97,12 @@ std::pair<std::vector<float>, std::vector<float>> MusicalQuantizer::quantizeSpec
 
         // Quantize bin frequency
         float quantizedFreq = quantizeFrequency(binFreq, strength);
+
+        // Apply drift if provided
+        if (driftCents != nullptr && static_cast<size_t>(k) < driftCents->size())
+        {
+            quantizedFreq = applyDriftCents(quantizedFreq, (*driftCents)[static_cast<size_t>(k)]);
+        }
 
         // Calculate target bin
         int targetBin = static_cast<int>(std::round(quantizedFreq / binResolution));

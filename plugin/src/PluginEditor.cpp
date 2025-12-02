@@ -454,6 +454,36 @@ FrequencyShifterEditor::FrequencyShifterEditor(FrequencyShifterProcessor& p)
     // Add slider listener for manual sync in log mode
     shiftSlider.addListener(this);
 
+    // Setup drift amount slider
+    setupSlider(driftAmountSlider, juce::Slider::LinearHorizontal);
+    driftAmountSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
+    addAndMakeVisible(driftAmountSlider);
+    driftAmountAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_DRIFT_AMOUNT, driftAmountSlider);
+
+    setupLabel(driftAmountLabel, "DRIFT");
+    addAndMakeVisible(driftAmountLabel);
+
+    // Setup drift rate slider
+    setupSlider(driftRateSlider, juce::Slider::LinearHorizontal);
+    driftRateSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
+    addAndMakeVisible(driftRateSlider);
+    driftRateAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_DRIFT_RATE, driftRateSlider);
+
+    setupLabel(driftRateLabel, "RATE");
+    addAndMakeVisible(driftRateLabel);
+
+    // Setup drift mode combo
+    driftModeCombo.addItem("LFO", 1);
+    driftModeCombo.addItem("Perlin", 2);
+    addAndMakeVisible(driftModeCombo);
+    driftModeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_DRIFT_MODE, driftModeCombo);
+
+    setupLabel(driftModeLabel, "MODE");
+    addAndMakeVisible(driftModeLabel);
+
     // Setup spectrum analyzer toggle
     spectrumButton.setButtonText("Spectrum");
     spectrumButton.setColour(juce::ToggleButton::textColourId, juce::Colour(Colors::text));
@@ -470,14 +500,14 @@ FrequencyShifterEditor::FrequencyShifterEditor(FrequencyShifterProcessor& p)
 
         // Resize window when spectrum is toggled
         if (spectrumVisible)
-            setSize(500, 520);
+            setSize(500, 560);
         else
-            setSize(500, 400);
+            setSize(500, 440);
     };
     addAndMakeVisible(spectrumButton);
 
     // Set editor size
-    setSize(500, 400);
+    setSize(500, 440);
 }
 
 FrequencyShifterEditor::~FrequencyShifterEditor()
@@ -532,13 +562,13 @@ void FrequencyShifterEditor::paint(juce::Graphics& g)
     // Controls panel
     g.fillRoundedRectangle(240.0f, 65.0f, 240.0f, 200.0f, 10.0f);
 
-    // Mix panel
-    g.fillRoundedRectangle(20.0f, 280.0f, 460.0f, 100.0f, 10.0f);
+    // Mix & Drift panel
+    g.fillRoundedRectangle(20.0f, 280.0f, 460.0f, 140.0f, 10.0f);
 
     // Spectrum panel (when visible)
     if (spectrumVisible)
     {
-        g.fillRoundedRectangle(20.0f, 390.0f, 460.0f, 120.0f, 10.0f);
+        g.fillRoundedRectangle(20.0f, 430.0f, 460.0f, 120.0f, 10.0f);
     }
 }
 
@@ -568,15 +598,28 @@ void FrequencyShifterEditor::resized()
     qualityModeLabel.setBounds(rightPanelX, 220, labelWidth, 20);
     qualityModeCombo.setBounds(rightPanelX + labelWidth, 218, controlWidth, 24);
 
-    // Mix controls - bottom panel
-    dryWetLabel.setBounds(40, 305, 60, 20);
-    dryWetSlider.setBounds(100, 303, 260, 24);
-    spectrumButton.setBounds(370, 303, 100, 24);
+    // Mix controls - bottom panel row 1
+    dryWetLabel.setBounds(40, 295, 60, 20);
+    dryWetSlider.setBounds(100, 293, 260, 24);
+    spectrumButton.setBounds(370, 293, 100, 24);
+
+    // Drift controls - bottom panel row 2
+    driftAmountLabel.setBounds(40, 330, 50, 20);
+    driftAmountSlider.setBounds(90, 328, 120, 24);
+
+    driftRateLabel.setBounds(220, 330, 40, 20);
+    driftRateSlider.setBounds(260, 328, 100, 24);
+
+    driftModeLabel.setBounds(370, 330, 40, 20);
+    driftModeCombo.setBounds(410, 328, 60, 24);
+
+    // Drift section label
+    // (drawn in paint if needed)
 
     // Spectrum analyzer (below main controls when visible)
     if (spectrumAnalyzer && spectrumVisible)
     {
-        spectrumAnalyzer->setBounds(20, 395, 460, 110);
+        spectrumAnalyzer->setBounds(20, 435, 460, 110);
     }
 }
 

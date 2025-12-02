@@ -142,6 +142,19 @@ private:
     juce::ToggleButton logScaleButton;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> logScaleAttachment;
 
+    // Drift controls (for organic/imperfect quantization)
+    juce::Slider driftAmountSlider;
+    juce::Label driftAmountLabel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> driftAmountAttachment;
+
+    juce::Slider driftRateSlider;
+    juce::Label driftRateLabel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> driftRateAttachment;
+
+    juce::ComboBox driftModeCombo;
+    juce::Label driftModeLabel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> driftModeAttachment;
+
     // Manual sync for log mode (SliderAttachment doesn't support custom ranges)
     bool isLogModeActive = false;
     void sliderValueChanged(juce::Slider* slider) override;
