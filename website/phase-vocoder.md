@@ -13,36 +13,48 @@ This page provides in-depth documentation for the enhanced phase vocoder impleme
 
 In the frequency domain, each frequency component has two properties:
 
-```
-Complex Spectrum: X[k] = |X[k]| × e^(j·φ[k])
-                        ↑           ↑
-                    magnitude     phase
-```
+$$X[k] = |X[k]| \cdot e^{j\phi[k]}$$
 
-- **Magnitude**: How loud (amplitude)
-- **Phase**: Where in the cycle (timing)
+<div class="feature-grid">
+  <div class="feature-card">
+    <h4>Magnitude $|X[k]|$</h4>
+    <p>How loud (amplitude) — determines volume of each frequency</p>
+  </div>
+  <div class="feature-card">
+    <h4>Phase $\phi[k]$</h4>
+    <p>Where in the cycle (timing) — determines waveform shape</p>
+  </div>
+</div>
 
 ### Why Phase Gets Broken
 
 When we shift frequencies, we change bin assignments:
 
-```
-Original:
-Bin 100 → 440 Hz → magnitude=1.0, phase=0.5π
+<div class="mermaid">
+flowchart LR
+    subgraph Before ["Before Shift"]
+        A["Bin 100<br/>440 Hz<br/>φ = 0.5π"]
+    end
 
-After +100 Hz shift:
-Bin 109 → 540 Hz → magnitude=1.0, phase=???
-```
+    subgraph After ["After +100 Hz"]
+        B["Bin 109<br/>540 Hz<br/>φ = ???"]
+    end
+
+    A -->|shift| B
+
+    style A fill:#3d2963,stroke:#5b4180,color:#f5f0e6
+    style B fill:#cd8b32,stroke:#b8860b,color:#fff
+</div>
 
 If we just copy the original phase, it's **wrong** for the new frequency!
 
 ### The Artifacts
 
 Incorrect phase causes:
-- **Metallic/robotic sound** - phase incoherence across bins
-- **Phasiness** - loss of presence
-- **Smearing** - transients lose sharpness
-- **Pre-echo** - artifacts before transients
+- **Metallic/robotic sound** — phase incoherence across bins
+- **Phasiness** — loss of presence
+- **Smearing** — transients lose sharpness
+- **Pre-echo** — artifacts before transients
 
 ---
 
@@ -52,10 +64,9 @@ Incorrect phase causes:
 
 Phase must evolve correctly **across frames in time**.
 
-For a sinusoid at frequency f:
-```
-Expected phase advance = 2π × f × hop_size / sample_rate
-```
+For a sinusoid at frequency $f$:
+
+$$\phi_{\text{expected}} = \frac{2\pi f H}{f_s}$$
 
 If phase doesn't advance correctly → clicks, discontinuities
 
@@ -63,11 +74,9 @@ If phase doesn't advance correctly → clicks, discontinuities
 
 Phase relationships **between frequency bins** must be preserved.
 
-For a harmonic sound (e.g., 440 Hz + 880 Hz):
-```
-Fundamental: bin k   → phase φ₁
-Harmonic:    bin 2k  → phase φ₂ ≈ 2×φ₁
-```
+For a harmonic sound (e.g., 440 Hz fundamental + 880 Hz harmonic):
+
+$$\phi_{\text{harmonic}} \approx 2 \times \phi_{\text{fundamental}}$$
 
 If this relationship breaks → metallic sound
 
@@ -77,6 +86,26 @@ If this relationship breaks → metallic sound
 
 Based on **Laroche & Dolson (1999)**: "Improved phase vocoder time-scale modification of audio"
 
+<div class="mermaid">
+flowchart TD
+    A[Frame Input] --> B[Peak Detection]
+    B --> C[Instantaneous Frequency]
+    C --> D[Phase Locking]
+    D --> E[Phase Synthesis]
+    E --> F[Frame Output]
+
+    B -->|Find harmonics| C
+    C -->|True frequencies| D
+    D -->|Lock around peaks| E
+
+    style A fill:#7c3aed,stroke:#9333ea,color:#fff
+    style F fill:#cd8b32,stroke:#b8860b,color:#fff
+    style B fill:#3d2963,stroke:#5b4180,color:#f5f0e6
+    style C fill:#3d2963,stroke:#5b4180,color:#f5f0e6
+    style D fill:#3d2963,stroke:#5b4180,color:#f5f0e6
+    style E fill:#3d2963,stroke:#5b4180,color:#f5f0e6
+</div>
+
 ### 1. Peak Detection
 
 Spectral peaks represent important content:
@@ -84,17 +113,12 @@ Spectral peaks represent important content:
 - Formants in vocals
 - Resonances in instruments
 
-```python
-def detect_peaks(magnitude, threshold_db=-40):
-    mag_db = 20 × log10(magnitude + ε)
-    threshold = max(mag_db) + threshold_db
+**Algorithm:** Find local maxima above threshold:
 
-    for i in range(1, n_bins-1):
-        if (mag_db[i] > threshold and
-            mag_db[i] > mag_db[i-1] and
-            mag_db[i] > mag_db[i+1]):
-            mark_as_peak(i)
-```
+$$\text{peak}[k] = \begin{cases}
+1 & \text{if } |X[k]| > |X[k-1]| \text{ and } |X[k]| > |X[k+1]| \text{ and } |X[k]|_{\text{dB}} > \text{threshold} \\
+0 & \text{otherwise}
+\end{cases}$$
 
 ### 2. Identity Phase Locking
 
@@ -102,16 +126,11 @@ def detect_peaks(magnitude, threshold_db=-40):
 
 Bins near a peak belong to the same partial. Their phases should maintain their relationships.
 
-```python
-def phase_lock_vertical(phase, peaks, region_size=4):
-    for peak_idx in peaks:
-        region = [peak_idx - region_size, peak_idx + region_size]
-        peak_phase = phase[peak_idx]
+For each peak at bin $p$ with region of influence $r$:
 
-        for bin_idx in region:
-            phase_offset = original_phase[bin_idx] - peak_phase
-            locked_phase[bin_idx] = peak_phase + phase_offset
-```
+$$\phi_{\text{locked}}[k] = \phi[p] + (\phi_{\text{original}}[k] - \phi[p])$$
+
+for all $k \in [p-r, p+r]$
 
 **Why it works:**
 - Peak represents the "center" of a partial
@@ -120,72 +139,68 @@ def phase_lock_vertical(phase, peaks, region_size=4):
 
 ### 3. Instantaneous Frequency Estimation
 
-Standard FFT assumes frequencies are exact multiples of `sample_rate / fft_size`.
+Standard FFT assumes frequencies are exact multiples of $f_s / N$.
 
 Real audio frequencies fall between bins:
-```
-440 Hz might fall in bin 40.8 (not integer!)
-```
+> 440 Hz might fall in bin 40.8 (not integer!)
 
-We compute the **true** frequency:
+We compute the **true** frequency using phase deviation:
 
-```python
-def compute_instantaneous_frequency(phase_prev, phase_curr):
-    expected = 2π × bin_freq[k] × hop_size / sample_rate
-    actual = phase_curr[k] - phase_prev[k]
-    deviation = wrap(actual - expected)
+$$\phi_{\text{expected}}[k] = \frac{2\pi k H}{N}$$
 
-    inst_freq[k] = bin_freq[k] + deviation × sample_rate / (2π × hop_size)
-```
+$$\Delta\phi = \phi_{\text{curr}}[k] - \phi_{\text{prev}}[k] - \phi_{\text{expected}}[k]$$
+
+$$f_{\text{inst}}[k] = \frac{k \cdot f_s}{N} + \frac{\text{wrap}(\Delta\phi) \cdot f_s}{2\pi H}$$
 
 ### 4. Phase Synthesis
 
 Generate coherent phases for the modified spectrum:
 
-```python
-phase_advance = 2π × shifted_freq × hop_size / sample_rate
-synth_phase = synth_phase_prev + phase_advance
-synth_phase = wrap(synth_phase)  # to [-π, π]
-```
+$$\phi_{\text{advance}} = \frac{2\pi \cdot f_{\text{shifted}} \cdot H}{f_s}$$
+
+$$\phi_{\text{synth}} = \phi_{\text{prev}} + \phi_{\text{advance}}$$
+
+$$\phi_{\text{synth}} = \text{wrap}(\phi_{\text{synth}}) \quad \text{to } [-\pi, \pi]$$
 
 ---
 
 ## Complete Processing Flow
 
-```python
-def process_frame_with_phase_vocoder(frame_idx):
-    # Get current and previous frames
-    mag_curr = magnitude[frame_idx]
-    phase_curr = phase[frame_idx]
+<div class="mermaid">
+flowchart TD
+    subgraph Input ["📊 Input"]
+        I1[Magnitude]
+        I2[Phase]
+    end
 
-    # Step 1: Detect peaks
-    peaks = detect_peaks(mag_curr, threshold_db=-40)
+    subgraph Process ["⚙️ Phase Vocoder"]
+        P1[Detect Peaks]
+        P2[Compute Inst. Freq]
+        P3[Phase Locking]
+        P4[Apply Shift]
+        P5[Synthesize Phase]
+        P6[Reassign Bins]
+    end
 
-    # Step 2: Compute instantaneous frequencies
-    inst_freq = compute_instantaneous_frequency(
-        phase_prev, phase_curr, hop_size, sample_rate
-    )
+    subgraph Output ["🔊 Output"]
+        O1[Shifted Magnitude]
+        O2[Coherent Phase]
+    end
 
-    # Step 3: Apply vertical phase locking
-    locked_phase = phase_lock_vertical(phase_curr, peaks, region_size=4)
+    I1 --> P1
+    I2 --> P2
+    P1 --> P3
+    P2 --> P3
+    P3 --> P4
+    P4 --> P5
+    P5 --> P6
+    P6 --> O1
+    P6 --> O2
 
-    # Step 4: Apply frequency shift
-    shifted_freq = inst_freq + shift_hz
-
-    # Step 5: Synthesize phase for new frequencies
-    phase_advance = 2π × shifted_freq × hop_size / sample_rate
-    synth_phase = synth_phase_prev + phase_advance
-
-    # Step 6: Reassign to new bins
-    bin_shift = round(shift_hz / bin_resolution)
-    for k in range(n_bins):
-        k_new = k + bin_shift
-        if 0 <= k_new < n_bins:
-            mag_shifted[k_new] = mag_curr[k]
-            phase_shifted[k_new] = synth_phase[k]
-
-    return mag_shifted, phase_shifted
-```
+    style Input fill:#1f1714,stroke:#3d3330,color:#f5f0e6
+    style Process fill:#1f1714,stroke:#3d3330,color:#f5f0e6
+    style Output fill:#1f1714,stroke:#3d3330,color:#f5f0e6
+</div>
 
 ---
 
@@ -193,31 +208,27 @@ def process_frame_with_phase_vocoder(frame_idx):
 
 ### Peak Detection Threshold
 
-```
-threshold_db = -40  # Default
-```
+Default: $\text{threshold} = -40 \text{ dB}$
 
 | Value | Effect |
 |-------|--------|
 | Too high (-20 dB) | Misses weak harmonics, more artifacts |
 | Too low (-60 dB) | Detects noise as peaks, over-locking |
-| Recommended (-40 dB) | Good balance for most music |
+| **Recommended (-40 dB)** | Good balance for most music |
 
 ### Region of Influence
 
-```
-region_size = 4  # ±4 bins around peak
-```
+Default: $r = 4$ bins (±4 bins around each peak)
 
-At 44.1kHz with 4096 FFT:
-- Bin width: ~10.77 Hz
-- Region: ±43 Hz around each peak
+At $f_s = 44100$ Hz with $N = 4096$:
+- Bin width: $\Delta f \approx 10.77$ Hz
+- Region: $\pm 43$ Hz around each peak
 
 | Value | Effect |
 |-------|--------|
-| Too small (2) | Incomplete phase locking |
-| Too large (8) | Locks bins from different partials |
-| Recommended (4) | Good for 4096 FFT |
+| Too small ($r=2$) | Incomplete phase locking |
+| Too large ($r=8$) | Locks bins from different partials |
+| **Recommended ($r=4$)** | Good for 4096 FFT |
 
 ---
 
@@ -229,49 +240,48 @@ Comparison vs. naive phase copying:
 
 | Metric | Naive | Enhanced |
 |--------|-------|----------|
-| Metallic Artifacts | High | Low (~80% reduction) |
-| Transient Preservation | Poor | Good |
-| Harmonic Clarity | Low | High |
-| Pre-echo | Noticeable | Minimal |
+| Metallic Artifacts | High | **Low (~80% reduction)** |
+| Transient Preservation | Poor | **Good** |
+| Harmonic Clarity | Low | **High** |
+| Pre-echo | Noticeable | **Minimal** |
 
 ### Computational Cost
 
-```
-Additional per frame:
-- Peak detection: O(N)
-- Phase locking: O(peaks × region) ≈ O(80)
-- Total overhead: ~15-20%
-```
+$$O(N) \text{ for peak detection}$$
+$$O(\text{peaks} \times r) \approx O(80) \text{ for phase locking}$$
 
-Well worth it for the quality improvement!
+**Total overhead: ~15-20%** — well worth it for the quality improvement!
 
 ---
 
 ## Troubleshooting
 
-### Still Sounds Metallic
+<div class="info-box">
+<strong>Still Sounds Metallic?</strong>
+<ul>
+<li>Reduce shift amount (keep under ±250 Hz)</li>
+<li>Increase FFT size (4096 → 8192)</li>
+<li>Reduce hop size (1024 → 512)</li>
+</ul>
+</div>
 
-Try:
-- Reduce shift amount (keep under ±250 Hz)
-- Increase FFT size (4096 → 8192)
-- Reduce hop size (1024 → 512)
-
-### Sounds Muffled/Smeared
-
-Cause: Over-aggressive phase locking
-
-Fix:
-- Reduce region_size (4 → 2)
-- Raise threshold (-40 → -30 dB)
+<div class="info-box accent">
+<strong>Sounds Muffled/Smeared?</strong>
+<p>Cause: Over-aggressive phase locking</p>
+<ul>
+<li>Reduce region_size (4 → 2)</li>
+<li>Raise threshold (-40 → -30 dB)</li>
+</ul>
+</div>
 
 ### Material-Specific Issues
 
 | Material | Issue | Solution |
 |----------|-------|----------|
-| Vocals | Usually works great | Default settings |
-| Percussion | May smear transients | Smaller FFT (2048) |
-| Bass | Coarse quantization | Larger FFT (8192) |
-| Noise | May sound worse | Mix with dry signal |
+| **Vocals** | Usually works great | Default settings |
+| **Percussion** | May smear transients | Smaller FFT (2048) |
+| **Bass** | Coarse quantization | Larger FFT (8192) |
+| **Noise** | May sound worse | Mix with dry signal |
 
 ---
 

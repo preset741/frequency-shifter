@@ -24,9 +24,7 @@ This page provides a comprehensive overview of the harmonic-preserving frequency
 
 Traditional frequency shifting adds a fixed Hz offset to all frequencies:
 
-```
-f_output = f_input + Δf
-```
+$$f_{\text{output}} = f_{\text{input}} + \Delta f$$
 
 This **destroys harmonic relationships**. For example:
 
@@ -42,57 +40,42 @@ The shifted frequencies are **no longer harmonically related**, resulting in a m
 
 We combine three techniques:
 
-1. **Spectral Frequency Shifting** - Linear Hz offset in frequency domain
-2. **Musical Scale Quantization** - Snap shifted frequencies to nearest scale notes
-3. **Enhanced Phase Vocoder** - Maintain phase coherence to reduce artifacts
+1. **Spectral Frequency Shifting** — Linear Hz offset in frequency domain
+2. **Musical Scale Quantization** — Snap shifted frequencies to nearest scale notes
+3. **Enhanced Phase Vocoder** — Maintain phase coherence to reduce artifacts
 
 ---
 
 ## Processing Pipeline
 
-```
-Input Audio (time domain)
-    ↓
-┌─────────────────────────────────────────────────┐
-│ STEP 1: Analysis (STFT)                         │
-│ - Apply windowing (Hann, Hamming, Blackman)     │
-│ - Compute FFT per frame                         │
-│ - Extract magnitude and phase spectra           │
-└─────────────────────────────────────────────────┘
-    ↓
-┌─────────────────────────────────────────────────┐
-│ STEP 2: Frequency Shifting                      │
-│ - Calculate bin shift from Hz offset            │
-│ - Reassign magnitudes to new bins               │
-│ - Handle aliasing at Nyquist boundary           │
-└─────────────────────────────────────────────────┘
-    ↓
-┌─────────────────────────────────────────────────┐
-│ STEP 3: Musical Quantization (Optional)         │
-│ - Convert bin frequencies to MIDI notes         │
-│ - Quantize to nearest scale degree              │
-│ - Redistribute energy to quantized bins         │
-│ - Blend with original (quantize_strength param) │
-└─────────────────────────────────────────────────┘
-    ↓
-┌─────────────────────────────────────────────────┐
-│ STEP 4: Phase Vocoder                           │
-│ - Detect spectral peaks                         │
-│ - Compute instantaneous frequencies             │
-│ - Apply identity phase locking                  │
-│ - Synthesize coherent phases                    │
-└─────────────────────────────────────────────────┘
-    ↓
-┌─────────────────────────────────────────────────┐
-│ STEP 5: Synthesis (ISTFT)                       │
-│ - Inverse FFT per frame                         │
-│ - Apply synthesis window                        │
-│ - Overlap-add frames                            │
-│ - Window normalization                          │
-└─────────────────────────────────────────────────┘
-    ↓
-Output Audio (time domain)
-```
+<div class="mermaid">
+flowchart TD
+    subgraph Analysis ["📊 Analysis"]
+        A1[Window Function] --> A2[Forward FFT]
+        A2 --> A3[Extract Magnitude & Phase]
+    end
+
+    subgraph Processing ["⚙️ Processing"]
+        P1[Frequency Shifting] --> P2[Musical Quantization]
+        P2 --> P3[Phase Vocoder]
+    end
+
+    subgraph Synthesis ["🔊 Synthesis"]
+        S1[Inverse FFT] --> S2[Overlap-Add]
+        S2 --> S3[Window Normalization]
+    end
+
+    IN[🎵 Input Audio] --> Analysis
+    Analysis --> Processing
+    Processing --> Synthesis
+    Synthesis --> OUT[🔊 Output Audio]
+
+    style IN fill:#7c3aed,stroke:#9333ea,color:#fff
+    style OUT fill:#cd8b32,stroke:#b8860b,color:#fff
+    style Analysis fill:#1f1714,stroke:#3d3330,color:#f5f0e6
+    style Processing fill:#1f1714,stroke:#3d3330,color:#f5f0e6
+    style Synthesis fill:#1f1714,stroke:#3d3330,color:#f5f0e6
+</div>
 
 ---
 
@@ -100,102 +83,98 @@ Output Audio (time domain)
 
 ### Short-Time Fourier Transform
 
+The STFT converts audio from time domain to time-frequency representation.
+
 **Forward Transform:**
 
-```
-X[k, m] = Σ(n=0 to N-1) x[n + mH] · w[n] · e^(-j2πkn/N)
-```
+$$X[k, m] = \sum_{n=0}^{N-1} x[n + mH] \cdot w[n] \cdot e^{-j\frac{2\pi kn}{N}}$$
 
 Where:
-- `k` = frequency bin index (0 to N-1)
-- `m` = frame index
-- `H` = hop size (samples between frames)
-- `N` = FFT size
-- `w[n]` = window function
+- $k$ = frequency bin index $(0$ to $N-1)$
+- $m$ = frame index
+- $H$ = hop size (samples between frames)
+- $N$ = FFT size
+- $w[n]$ = window function
 
 **Magnitude and Phase:**
 
-```
-|X[k, m]| = sqrt(Re(X)² + Im(X)²)
-φ[k, m] = atan2(Im(X), Re(X))
-```
+$$|X[k, m]| = \sqrt{\text{Re}(X)^2 + \text{Im}(X)^2}$$
+
+$$\phi[k, m] = \arctan2(\text{Im}(X), \text{Re}(X))$$
 
 **Frequency Resolution:**
 
-```
-Δf = sample_rate / N
-f[k] = k · Δf
-```
+$$\Delta f = \frac{f_s}{N}$$
 
-Example: At 44.1kHz with 4096 FFT → ~10.77 Hz per bin
+$$f[k] = k \cdot \Delta f$$
+
+<div class="info-box">
+<strong>Example:</strong> At $f_s = 44100$ Hz with $N = 4096$:
+
+$$\Delta f = \frac{44100}{4096} \approx 10.77 \text{ Hz per bin}$$
+</div>
+
+---
 
 ### Frequency Shifting
 
-For each frequency bin `k`:
+For each frequency bin $k$:
 
-```
-f_shifted = f[k] + shift_hz
-k_new = round(f_shifted / Δf)
-```
+$$f_{\text{shifted}} = f[k] + f_{\text{shift}}$$
 
-Magnitude redistribution with energy conservation:
+$$k_{\text{new}} = \text{round}\left(\frac{f_{\text{shifted}}}{\Delta f}\right)$$
 
-```
-|Y[k_new]| = sqrt(Σ |X[k_source]|²)
-```
+**Magnitude redistribution with energy conservation:**
+
+$$|Y[k_{\text{target}}]| = \sqrt{\sum_{\text{sources}} |X[k_{\text{source}}]|^2}$$
+
+---
 
 ### Musical Quantization
 
 **Frequency to MIDI:**
 
-```
-midi = 69 + 12 × log₂(f / 440)
-```
+$$\text{MIDI} = 69 + 12 \cdot \log_2\left(\frac{f}{440}\right)$$
 
 **Scale Quantization:**
 
-```python
-relative_note = (midi - root) mod 12
-closest_degree = argmin(|relative_note - scale_degrees|)
-quantized_midi = root + octave × 12 + closest_degree
-```
+$$\text{relative} = (\text{MIDI} - \text{root}) \mod 12$$
+
+$$\text{closest} = \arg\min_{d \in \text{scale}} |\ \text{relative} - d\ |$$
+
+$$\text{MIDI}_{\text{quantized}} = \text{root} + \text{octave} \times 12 + \text{closest}$$
 
 **MIDI to Frequency:**
 
-```
-f = 440 × 2^((midi - 69) / 12)
-```
+$$f = 440 \cdot 2^{\frac{\text{MIDI} - 69}{12}}$$
 
 **Quantization Strength:**
 
-```
-f_final = (1 - α) × f_shifted + α × f_quantized
-```
+$$f_{\text{final}} = (1 - \alpha) \cdot f_{\text{shifted}} + \alpha \cdot f_{\text{quantized}}$$
 
-Where `α ∈ [0, 1]`:
-- `α = 0`: Pure frequency shift (inharmonic)
-- `α = 1`: Fully quantized to scale (harmonic)
+Where $\alpha \in [0, 1]$:
+- $\alpha = 0$: Pure frequency shift (inharmonic)
+- $\alpha = 1$: Fully quantized to scale (harmonic)
+
+---
 
 ### Phase Vocoder Equations
 
 **Expected Phase Advance:**
 
-```
-φ_expected[k] = 2π × k × hop_size / fft_size
-```
+$$\phi_{\text{expected}}[k] = \frac{2\pi k H}{N}$$
+
+**Phase Deviation:**
+
+$$\Delta\phi = \phi_{\text{curr}} - \phi_{\text{prev}} - \phi_{\text{expected}}$$
 
 **Instantaneous Frequency:**
 
-```
-Δφ = (φ_curr - φ_prev - φ_expected) mod 2π
-f_inst[k] = f_bin[k] + Δφ × sample_rate / (2π × hop_size)
-```
+$$f_{\text{inst}}[k] = f_{\text{bin}}[k] + \frac{\Delta\phi \cdot f_s}{2\pi H}$$
 
 **Phase Synthesis:**
 
-```
-φ_synth[k] = φ_prev_synth[k] + 2π × f_new[k] × hop_size / sample_rate
-```
+$$\phi_{\text{synth}}[k] = \phi_{\text{prev}}[k] + \frac{2\pi f_{\text{new}}[k] \cdot H}{f_s}$$
 
 ---
 
@@ -204,8 +183,6 @@ f_inst[k] = f_bin[k] + Δφ × sample_rate / (2π × hop_size)
 ### 1. STFT (Short-Time Fourier Transform)
 
 Converts audio from time domain to time-frequency representation.
-
-**Key Parameters:**
 
 | Parameter | Values | Trade-off |
 |-----------|--------|-----------|
@@ -217,14 +194,13 @@ Converts audio from time domain to time-frequency representation.
 
 Moves all frequency content by a fixed Hz amount.
 
-**Algorithm:**
-```
-bin_shift = round(shift_hz / bin_resolution)
-for each bin k:
-    k_new = k + bin_shift
-    if 0 <= k_new < num_bins:
-        magnitude_new[k_new] = magnitude[k]
-```
+<div class="mermaid">
+flowchart LR
+    A[Bin k at f Hz] -->|+ shift_hz| B[Bin k_new at f + shift Hz]
+
+    style A fill:#3d2963,stroke:#5b4180,color:#f5f0e6
+    style B fill:#cd8b32,stroke:#b8860b,color:#fff
+</div>
 
 ### 3. Musical Quantizer
 
@@ -242,12 +218,12 @@ Snaps frequencies to the nearest notes in a musical scale.
 
 ### 4. Phase Vocoder
 
-Maintains phase coherence during spectral modifications.
+Maintains phase coherence during spectral modifications using **identity phase locking** (Laroche & Dolson, 1999).
 
 **Key Techniques:**
 
 1. **Peak Detection**: Identify spectral peaks (harmonics, formants)
-2. **Identity Phase Locking**: Lock phases around peaks (Laroche & Dolson)
+2. **Identity Phase Locking**: Lock phases around peaks
 3. **Instantaneous Frequency**: Calculate true frequency in each bin
 4. **Phase Synthesis**: Generate coherent phases for modified spectrum
 
@@ -263,27 +239,58 @@ Maintains phase coherence during spectral modifications.
 | Balanced | 4096 | 1024 | ~116 ms | General purpose |
 | Quality | 8192 | 2048 | ~232 ms | Offline, bass-heavy |
 
+**Latency Formula:**
+
+$$\text{latency} = \frac{N + H}{f_s}$$
+
 ### Recommended Settings
 
-**Metallic/Robotic Effects:**
-- Shift: 50-200 Hz
-- Quantize: 0%
-- Quality: Low Latency or Balanced
+<div class="info-box accent">
+<strong>Metallic/Robotic Effects:</strong>
+<ul>
+<li>Shift: 50-200 Hz</li>
+<li>Quantize: 0%</li>
+<li>Quality: Low Latency or Balanced</li>
+</ul>
+</div>
 
-**Re-harmonization:**
-- Shift: Any amount
-- Quantize: 100%
-- Scale: Choose your target key
-- Quality: Balanced or Quality
+<div class="info-box accent">
+<strong>Re-harmonization:</strong>
+<ul>
+<li>Shift: Any amount</li>
+<li>Quantize: 100%</li>
+<li>Scale: Choose your target key</li>
+<li>Quality: Balanced or Quality</li>
+</ul>
+</div>
 
-**Subtle Chorus/Detuning:**
-- Shift: 5-20 Hz
-- Quantize: 30-50%
-- Quality: Balanced
+<div class="info-box accent">
+<strong>Subtle Chorus/Detuning:</strong>
+<ul>
+<li>Shift: 5-20 Hz</li>
+<li>Quantize: 30-50%</li>
+<li>Quality: Balanced</li>
+</ul>
+</div>
 
-**Bass-Heavy Material:**
-- Quality: Quality mode (8192 FFT)
-- Better frequency resolution at low frequencies
+---
+
+## Performance Characteristics
+
+### Computational Complexity
+
+Per frame: $O(N \log N)$ for FFT operations
+
+For 1 second of audio at 44.1kHz with $N=4096$, $H=1024$:
+- Frames: ~43
+- Operations: ~2.1M
+
+### Known Limitations
+
+1. **Latency**: Not suitable for live performance (needs <10ms)
+2. **Transients**: Percussive material may smear slightly
+3. **Low Frequencies**: Coarse quantization below 100 Hz with small FFT
+4. **Extreme Shifts**: Best quality within ±500 Hz range
 
 ---
 
@@ -295,56 +302,19 @@ Maintains phase coherence during spectral modifications.
    "Improved phase vocoder time-scale modification of audio"
    *IEEE Transactions on Speech and Audio Processing*
 
-   Key contributions: Identity phase locking, peak-based processing
-
 2. **Zölzer, U. (2011)**
    "DAFX: Digital Audio Effects" (2nd ed.)
    *Wiley*
 
-   Comprehensive reference for STFT/ISTFT, window normalization
-
 3. **Smith, J. O. (2011)**
    "Spectral Audio Signal Processing"
-   *W3K Publishing* - [Online](https://ccrma.stanford.edu/~jos/sasp/)
-
-   Phase unwrapping, instantaneous frequency estimation
+   *W3K Publishing* — [Online](https://ccrma.stanford.edu/~jos/sasp/)
 
 ### Additional Resources
 
-- Flanagan & Golden (1966) - Original phase vocoder concept
-- Dolson (1986) - "The phase vocoder: A tutorial"
-- Průša & Holighaus (2022) - "Phase Vocoder Done Right"
-
----
-
-## Performance Characteristics
-
-### Computational Complexity
-
-Per frame: O(N log N) for FFT operations
-
-For 1 second of audio at 44.1kHz with N=4096, H=1024:
-- Frames: ~43
-- Operations: ~2.1M
-
-### Latency
-
-```
-latency = (fft_size + hop_size) / sample_rate
-```
-
-| FFT Size | Hop Size | Latency |
-|----------|----------|---------|
-| 2048 | 512 | ~58 ms |
-| 4096 | 1024 | ~116 ms |
-| 8192 | 2048 | ~232 ms |
-
-### Known Limitations
-
-1. **Latency**: Not suitable for live performance (needs <10ms)
-2. **Transients**: Percussive material may smear slightly
-3. **Low Frequencies**: Coarse quantization below 100 Hz with small FFT
-4. **Extreme Shifts**: Best quality within ±500 Hz range
+- Flanagan & Golden (1966) — Original phase vocoder concept
+- Dolson (1986) — "The phase vocoder: A tutorial"
+- Průša & Holighaus (2022) — "Phase Vocoder Done Right"
 
 ---
 

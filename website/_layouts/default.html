@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ page.title }} | {{ site.title }}</title>
+  <meta name="description" content="{{ site.description }}">
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+  <!-- MathJax for LaTeX -->
+  <script>
+    MathJax = {
+      tex: {
+        inlineMath: [['$', '$'], ['\\(', '\\)']],
+        displayMath: [['$$', '$$'], ['\\[', '\\]']],
+        processEscapes: true
+      },
+      svg: {
+        fontCache: 'global'
+      }
+    };
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
+
+  <!-- Mermaid for diagrams -->
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      mermaid.initialize({
+        startOnLoad: true,
+        theme: 'dark',
+        themeVariables: {
+          primaryColor: '#7c3aed',
+          primaryTextColor: '#f5f0e6',
+          primaryBorderColor: '#9333ea',
+          lineColor: '#cd8b32',
+          secondaryColor: '#3d2963',
+          tertiaryColor: '#1f1714',
+          background: '#141210',
+          mainBkg: '#1f1714',
+          nodeBorder: '#cd8b32',
+          clusterBkg: '#1f1714',
+          clusterBorder: '#3d3330',
+          titleColor: '#f5f0e6',
+          edgeLabelBackground: '#1f1714'
+        },
+        flowchart: {
+          curve: 'basis',
+          padding: 20
+        }
+      });
+    });
+  </script>
+
+  <style>
+    :root {
+      /* Background colors */
+      --background: hsl(20, 8%, 8%);
+      --foreground: hsl(30, 10%, 92%);
+
+      /* Primary - King's purple */
+      --primary: hsl(270, 50%, 45%);
+      --primary-glow: hsl(270, 60%, 55%);
+      --primary-dark: hsl(270, 50%, 35%);
+
+      /* Accent - Muted amber/orange */
+      --accent: hsl(30, 70%, 55%);
+      --accent-muted: hsl(30, 50%, 40%);
+      --accent-light: hsl(30, 70%, 65%);
+
+      /* Secondary */
+      --secondary: hsl(270, 30%, 25%);
+
+      /* Muted */
+      --muted: hsl(20, 10%, 18%);
+      --muted-foreground: hsl(30, 8%, 60%);
+
+      /* Card */
+      --card: hsl(20, 10%, 12%);
+      --border: hsl(20, 15%, 20%);
+
+      /* Code */
+      --code-bg: hsl(20, 10%, 14%);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--background);
+      color: var(--foreground);
+      line-height: 1.7;
+      font-size: 16px;
+    }
+
+    /* Header */
+    .site-header {
+      background: linear-gradient(135deg, var(--primary-dark) 0%, var(--secondary) 50%, var(--card) 100%);
+      padding: 3rem 2rem;
+      text-align: center;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .site-header h1 {
+      font-size: 2.5rem;
+      font-weight: 700;
+      background: linear-gradient(135deg, var(--primary-glow), var(--accent));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 0.5rem;
+    }
+
+    .site-header p {
+      color: var(--muted-foreground);
+      font-size: 1.1rem;
+    }
+
+    /* Navigation */
+    .nav-links {
+      display: flex;
+      justify-content: center;
+      gap: 1.5rem;
+      margin-top: 1.5rem;
+      flex-wrap: wrap;
+    }
+
+    .nav-links a {
+      color: var(--accent);
+      text-decoration: none;
+      padding: 0.5rem 1rem;
+      border: 1px solid var(--accent-muted);
+      border-radius: 6px;
+      transition: all 0.2s ease;
+      font-weight: 500;
+    }
+
+    .nav-links a:hover {
+      background: var(--accent);
+      color: var(--background);
+      border-color: var(--accent);
+    }
+
+    /* Main content */
+    .main-content {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 2rem;
+    }
+
+    /* Typography */
+    h1, h2, h3, h4, h5, h6 {
+      color: var(--foreground);
+      margin-top: 2rem;
+      margin-bottom: 1rem;
+      font-weight: 600;
+    }
+
+    h1 { font-size: 2rem; color: var(--primary-glow); }
+    h2 { font-size: 1.5rem; color: var(--primary-glow); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
+    h3 { font-size: 1.25rem; color: var(--accent); }
+    h4 { font-size: 1.1rem; color: var(--accent-muted); }
+
+    p {
+      margin-bottom: 1rem;
+    }
+
+    a {
+      color: var(--accent);
+      text-decoration: none;
+      transition: color 0.2s ease;
+    }
+
+    a:hover {
+      color: var(--accent-light);
+      text-decoration: underline;
+    }
+
+    /* Lists */
+    ul, ol {
+      margin-bottom: 1rem;
+      padding-left: 1.5rem;
+    }
+
+    li {
+      margin-bottom: 0.5rem;
+    }
+
+    /* Code */
+    code {
+      font-family: 'JetBrains Mono', monospace;
+      background: var(--code-bg);
+      padding: 0.2rem 0.4rem;
+      border-radius: 4px;
+      font-size: 0.9em;
+      color: var(--accent);
+    }
+
+    pre {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem;
+      overflow-x: auto;
+      margin-bottom: 1.5rem;
+    }
+
+    pre code {
+      background: none;
+      padding: 0;
+      color: var(--foreground);
+    }
+
+    /* Tables */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 1.5rem;
+      background: var(--card);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    th, td {
+      padding: 0.75rem 1rem;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+
+    th {
+      background: var(--secondary);
+      color: var(--primary-glow);
+      font-weight: 600;
+    }
+
+    tr:hover {
+      background: var(--muted);
+    }
+
+    /* Images */
+    img {
+      max-width: 100%;
+      height: auto;
+      border-radius: 8px;
+      margin: 1.5rem 0;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    }
+
+    /* Blockquotes */
+    blockquote {
+      border-left: 4px solid var(--primary);
+      padding-left: 1rem;
+      margin: 1.5rem 0;
+      color: var(--muted-foreground);
+      font-style: italic;
+    }
+
+    /* Horizontal rule */
+    hr {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 2rem 0;
+    }
+
+    /* Math blocks */
+    .MathJax {
+      font-size: 1.1em !important;
+    }
+
+    mjx-container[display="true"] {
+      background: var(--card);
+      padding: 1rem;
+      border-radius: 8px;
+      margin: 1rem 0;
+      overflow-x: auto;
+      border: 1px solid var(--border);
+    }
+
+    /* Mermaid diagrams */
+    .mermaid {
+      background: var(--card);
+      padding: 1.5rem;
+      border-radius: 8px;
+      margin: 1.5rem 0;
+      border: 1px solid var(--border);
+      text-align: center;
+    }
+
+    /* Cards / Info boxes */
+    .info-box {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--primary);
+      border-radius: 8px;
+      padding: 1rem 1.5rem;
+      margin: 1.5rem 0;
+    }
+
+    .info-box.accent {
+      border-left-color: var(--accent);
+    }
+
+    /* Buttons */
+    .btn {
+      display: inline-block;
+      padding: 0.75rem 1.5rem;
+      background: var(--primary);
+      color: var(--foreground);
+      border-radius: 6px;
+      text-decoration: none;
+      font-weight: 500;
+      transition: all 0.2s ease;
+      border: none;
+      cursor: pointer;
+    }
+
+    .btn:hover {
+      background: var(--primary-glow);
+      box-shadow: 0 4px 15px rgba(124, 58, 237, 0.4);
+      text-decoration: none;
+    }
+
+    .btn-outline {
+      background: transparent;
+      border: 1px solid var(--accent);
+      color: var(--accent);
+    }
+
+    .btn-outline:hover {
+      background: var(--accent);
+      color: var(--background);
+    }
+
+    /* Footer */
+    .site-footer {
+      text-align: center;
+      padding: 2rem;
+      border-top: 1px solid var(--border);
+      color: var(--muted-foreground);
+      margin-top: 3rem;
+    }
+
+    .site-footer a {
+      color: var(--accent-muted);
+    }
+
+    /* Responsive */
+    @media (max-width: 768px) {
+      .site-header h1 {
+        font-size: 1.8rem;
+      }
+
+      .main-content {
+        padding: 1rem;
+      }
+
+      .nav-links {
+        gap: 0.75rem;
+      }
+
+      .nav-links a {
+        padding: 0.4rem 0.8rem;
+        font-size: 0.9rem;
+      }
+    }
+
+    /* Equation styling */
+    .equation-box {
+      background: var(--card);
+      border: 1px solid var(--primary-dark);
+      border-radius: 8px;
+      padding: 1rem;
+      margin: 1rem 0;
+      overflow-x: auto;
+    }
+
+    /* Feature grid */
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 1rem;
+      margin: 1.5rem 0;
+    }
+
+    .feature-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.25rem;
+      transition: all 0.2s ease;
+    }
+
+    .feature-card:hover {
+      border-color: var(--primary);
+      box-shadow: 0 4px 20px rgba(124, 58, 237, 0.2);
+    }
+
+    .feature-card h4 {
+      color: var(--accent);
+      margin-top: 0;
+    }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <h1>{{ site.title }}</h1>
+    <p>{{ site.description }}</p>
+    <nav class="nav-links">
+      <a href="{{ site.baseurl }}/">Home</a>
+      <a href="{{ site.baseurl }}/algorithm.html">Algorithm</a>
+      <a href="{{ site.baseurl }}/phase-vocoder.html">Phase Vocoder</a>
+      <a href="{{ site.baseurl }}/math.html">Math</a>
+      <a href="https://github.com/furmanlukasz/frequency-shifter" target="_blank">GitHub</a>
+    </nav>
+  </header>
+
+  <main class="main-content">
+    {{ content }}
+  </main>
+
+  <footer class="site-footer">
+    <p>
+      <a href="https://github.com/furmanlukasz/frequency-shifter">Frequency Shifter</a> &mdash;
+      MIT License &mdash;
+      <a href="https://github.com/furmanlukasz/frequency-shifter/releases">Download</a>
+    </p>
+  </footer>
+</body>
+</html>
