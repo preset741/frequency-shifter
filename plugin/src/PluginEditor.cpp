@@ -21,6 +21,44 @@ void SpectrumAnalyzer::timerCallback()
 {
     if (audioProcessor.getSpectrumData(spectrumData))
     {
+        // Find peak in current frame (data is normalized 0-1, representing -100dB to 0dB)
+        float framePeakNorm = 0.0f;
+        for (size_t i = 0; i < SPECTRUM_SIZE; ++i)
+        {
+            framePeakNorm = std::max(framePeakNorm, spectrumData[i]);
+        }
+
+        // Convert normalized value back to dB for auto-scaling
+        float framePeakDb = framePeakNorm * 100.0f - 100.0f;  // Reverse the 0-1 to -100..0 dB mapping
+
+        // Update peak detector (fast attack, slow decay)
+        if (framePeakDb > currentPeakDb)
+        {
+            currentPeakDb = framePeakDb;
+        }
+        else
+        {
+            currentPeakDb *= peakDecayRate;
+            // Clamp to floor
+            if (currentPeakDb < floorDb)
+                currentPeakDb = floorDb;
+        }
+
+        // Update display ceiling (adapts to signal level)
+        // Target ceiling is peak + 10dB headroom, clamped to reasonable range
+        float targetCeiling = std::min(0.0f, std::max(-60.0f, currentPeakDb + 10.0f));
+
+        if (targetCeiling > displayCeilingDb)
+        {
+            // Fast attack when signal gets louder
+            displayCeilingDb = displayCeilingDb + (targetCeiling - displayCeilingDb) * ceilingAttackRate;
+        }
+        else
+        {
+            // Slow decay when signal gets quieter
+            displayCeilingDb = displayCeilingDb * ceilingDecayRate + targetCeiling * (1.0f - ceilingDecayRate);
+        }
+
         // Apply smoothing for visual appeal
         for (size_t i = 0; i < SPECTRUM_SIZE; ++i)
         {
@@ -40,6 +78,15 @@ void SpectrumAnalyzer::timerCallback()
                 needsRepaint = true;
             }
         }
+
+        // Also decay peak detector
+        currentPeakDb *= peakDecayRate;
+        if (currentPeakDb < floorDb)
+            currentPeakDb = floorDb;
+
+        // Slowly decay ceiling back to default
+        displayCeilingDb = displayCeilingDb * 0.999f + (-10.0f) * 0.001f;
+
         if (needsRepaint)
             repaint();
     }
@@ -51,18 +98,42 @@ void SpectrumAnalyzer::paint(juce::Graphics& g)
     const float width = bounds.getWidth();
     const float height = bounds.getHeight();
 
+    // Calculate current display range
+    const float rangeDb = displayCeilingDb - floorDb;
+
     // Background
     g.setColour(juce::Colour(backgroundColor));
     g.fillRoundedRectangle(bounds, 6.0f);
 
-    // Draw grid lines
+    // Draw grid lines with dynamic dB labels
     g.setColour(juce::Colour(gridColor));
 
-    // Horizontal grid lines (dB levels)
-    for (int db = -80; db <= 0; db += 20)
+    // Calculate nice grid spacing based on current range
+    int gridSpacing = 20;  // Default 20dB spacing
+    if (rangeDb < 50.0f) gridSpacing = 10;
+    if (rangeDb < 30.0f) gridSpacing = 5;
+
+    // Round ceiling to nearest grid line for cleaner labels
+    int ceilingRounded = static_cast<int>(std::ceil(displayCeilingDb / gridSpacing) * gridSpacing);
+
+    // Horizontal grid lines (dB levels) - draw from ceiling down to floor
+    for (int db = ceilingRounded; db >= static_cast<int>(floorDb); db -= gridSpacing)
     {
-        float y = height * (1.0f - (db + 100.0f) / 100.0f);
-        g.drawHorizontalLine(static_cast<int>(y), 0.0f, width);
+        // Map dB to y position using current dynamic range
+        float normalized = (static_cast<float>(db) - floorDb) / rangeDb;
+        float y = height * (1.0f - normalized);
+
+        if (y >= 0 && y <= height)
+        {
+            g.setColour(juce::Colour(gridColor));
+            g.drawHorizontalLine(static_cast<int>(y), 0.0f, width);
+
+            // Draw dB label on the left
+            g.setColour(juce::Colour(textColor));
+            g.setFont(juce::FontOptions(8.0f));
+            g.drawText(juce::String(db), 2, static_cast<int>(y) - 6, 25, 12,
+                       juce::Justification::left, false);
+        }
     }
 
     // Get frequency info
@@ -119,9 +190,14 @@ void SpectrumAnalyzer::paint(juce::Graphics& g)
             // Log scale x position
             float x = std::log(binFreq / fMin) / std::log(fMax / fMin) * width;
 
-            // Get magnitude (clamped)
-            float magnitude = smoothedData[static_cast<size_t>(bin)];
-            float y = height * (1.0f - magnitude);
+            // Get magnitude and convert to dB for auto-scaled display
+            float magnitudeNorm = smoothedData[static_cast<size_t>(bin)];
+            float magnitudeDb = magnitudeNorm * 100.0f - 100.0f;  // Convert 0-1 back to -100..0 dB
+
+            // Map dB to y position using dynamic range
+            float normalized = (magnitudeDb - floorDb) / rangeDb;
+            normalized = std::max(0.0f, std::min(1.0f, normalized));  // Clamp to valid range
+            float y = height * (1.0f - normalized);
 
             if (!pathStarted)
             {

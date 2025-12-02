@@ -33,6 +33,14 @@ private:
     // Smoothing factor (0-1, higher = slower decay)
     static constexpr float smoothingFactor = 0.8f;
 
+    // Auto-scaling state
+    float currentPeakDb = -60.0f;      // Current detected peak level in dB
+    float displayCeilingDb = -10.0f;   // Top of display range (adapts to signal)
+    static constexpr float floorDb = -100.0f;  // Bottom of display range (fixed)
+    static constexpr float peakDecayRate = 0.995f;  // How fast peak detector decays
+    static constexpr float ceilingAttackRate = 0.3f;  // How fast ceiling rises to meet peaks
+    static constexpr float ceilingDecayRate = 0.998f;  // How slowly ceiling falls
+
     // Colors
     static constexpr juce::uint32 backgroundColor = 0xFF1A1A2E;
     static constexpr juce::uint32 gridColor = 0xFF2A2A3E;
