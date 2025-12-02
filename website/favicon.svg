@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <defs>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#7c3aed"/>
+      <stop offset="100%" style="stop-color:#cd8b32"/>
+    </linearGradient>
+  </defs>
+  <!-- Background circle -->
+  <circle cx="16" cy="16" r="15" fill="#141210" stroke="url(#grad)" stroke-width="1.5"/>
+  <!-- Frequency wave / sine wave -->
+  <path d="M6 16 Q10 8, 16 16 T26 16" fill="none" stroke="url(#grad)" stroke-width="2.5" stroke-linecap="round"/>
+  <!-- Shift arrows -->
+  <path d="M22 10 L26 10 L26 14" fill="none" stroke="#cd8b32" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M10 22 L6 22 L6 18" fill="none" stroke="#7c3aed" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

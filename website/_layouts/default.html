@@ -6,6 +6,9 @@
   <title>{{ page.title }} | {{ site.title }}</title>
   <meta name="description" content="{{ site.description }}">
 
+  <!-- Favicon -->
+  <link rel="icon" type="image/svg+xml" href="{{ site.baseurl }}/favicon.svg">
+
   <!-- Google Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -352,6 +355,20 @@
       color: var(--accent-muted);
     }
 
+    .site-footer .developer-credit {
+      margin-top: 0.75rem;
+      font-size: 0.9rem;
+    }
+
+    .site-footer .developer-credit a {
+      color: var(--primary-glow);
+      font-weight: 500;
+    }
+
+    .site-footer .developer-credit a:hover {
+      color: var(--accent);
+    }
+
     /* Responsive */
     @media (max-width: 768px) {
       .site-header h1 {
@@ -431,6 +448,9 @@
       <a href="https://github.com/furmanlukasz/frequency-shifter">Frequency Shifter</a> &mdash;
       MIT License &mdash;
       <a href="https://github.com/furmanlukasz/frequency-shifter/releases">Download</a>
+    </p>
+    <p class="developer-credit">
+      Developed by <a href="https://datalabio.xyz">Datalab 108</a>
     </p>
   </footer>
 </body>
