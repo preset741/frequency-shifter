@@ -126,6 +126,7 @@ For complete mathematical details, see [Algorithm Documentation](algorithm.html)
 
 ## Documentation
 
+- [**User Guide**](user-guide.html) — Complete parameter reference and preset recipes
 - [Algorithm Details](algorithm.html) — Full technical documentation
 - [Phase Vocoder](phase-vocoder.html) — How phase coherence is maintained
 - [Mathematical Foundation](math.html) — The DSP math behind the plugin
