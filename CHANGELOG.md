@@ -2,6 +2,27 @@
 
 All notable changes to the Frequency Shifter plugin will be documented in this file.
 
+## [v44-PhasePreserve] - 2026-01-30
+
+### Fixed
+- **Phase Vocoder Compatibility**: Enhanced Mode (phase vocoder) now works correctly when combined with quantization
+- Phase continuity now ONLY applies to bins that are actually remapped by quantization
+- Bins that stay at their original frequency preserve input phase (including phase vocoder's coherent phase)
+
+### Technical Details
+- Added `binWasRemapped` tracking: distinguishes between remapped bins (quantization moved them) vs unchanged bins
+- Signal flow now correctly handles all combinations:
+  - Enhanced OFF + Quantize OFF: raw phases pass through ✓
+  - Enhanced ON + Quantize OFF: phase vocoder handles shift coherence ✓
+  - Enhanced OFF + Quantize ON: phase continuity handles quantized bins ✓
+  - Enhanced ON + Quantize ON: phase vocoder for shift, then phase continuity ONLY for remapped bins ✓
+
+### Investigation Findings
+- The v43 implementation unconditionally replaced ALL phases with MIDI-note accumulators
+- This discarded phase vocoder's carefully synthesized coherent phases
+- Now: only bins that get remapped to a different target use phase accumulators
+- Bins mapping to themselves (source == target) preserve the input phase
+
 ## [v43-QuantizeFix] - 2026-01-30
 
 ### Fixed
