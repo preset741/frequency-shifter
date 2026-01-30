@@ -194,6 +194,11 @@ private:
     std::array<int, MAX_CHANNELS> delayCompWritePos{};
     std::array<int, MAX_CHANNELS> delayCompReadPos{};
 
+    // Dry signal delay buffer (to align dry with wet when mixing)
+    // Must delay by full reported latency (MAX_FFT_SIZE samples)
+    std::array<std::vector<float>, MAX_CHANNELS> dryDelayBuffers;
+    std::array<int, MAX_CHANNELS> dryDelayWritePos{};
+
     // Spectrum visualization data (thread-safe FIFO)
     std::array<float, SPECTRUM_SIZE> spectrumData{};
     std::atomic<bool> spectrumDataReady{ false };

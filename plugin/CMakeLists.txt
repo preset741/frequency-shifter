@@ -58,7 +58,7 @@ juce_add_plugin(FrequencyShifter
     FORMATS AU VST3 AUv3 Standalone
 
     # Plugin name
-    PRODUCT_NAME "Frequency Shifter v41 SmearControl"
+    PRODUCT_NAME "Frequency Shifter v42 DryTiming"
 
     # Plugin characteristics
     IS_SYNTH FALSE

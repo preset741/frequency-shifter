@@ -593,6 +593,11 @@ void FrequencyShifterProcessor::reinitializeDsp()
         delayCompBuffers[ch].resize(static_cast<size_t>(MAX_FFT_SIZE) * 2, 0.0f);
         delayCompWritePos[ch] = 0;
         delayCompReadPos[ch] = 0;
+
+        // Initialize dry signal delay buffer
+        // Dry signal must be delayed by full reported latency to align with wet
+        dryDelayBuffers[ch].resize(static_cast<size_t>(MAX_FFT_SIZE) + 1, 0.0f);
+        dryDelayWritePos[ch] = 0;
     }
 
     // Prepare drift modulator with max FFT size for consistency
@@ -638,6 +643,7 @@ void FrequencyShifterProcessor::releaseResources()
             outputBuffers[ch][proc].clear();
         }
         delayCompBuffers[ch].clear();
+        dryDelayBuffers[ch].clear();
     }
 }
 
@@ -873,20 +879,25 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
             // Read from delay compensation buffer with the needed delay
             int readIdx = (delayCompWritePos[channel] - delayNeeded - 1 + static_cast<int>(delayCompBuffers[channel].size()))
                          % static_cast<int>(delayCompBuffers[channel].size());
-            channelData[i] = delayCompBuffers[channel][static_cast<size_t>(readIdx)];
-        }
+            float wetSample = delayCompBuffers[channel][static_cast<size_t>(readIdx)];
 
-        // Apply dry/wet mix
-        if (currentDryWet < 0.99f)
-        {
-            // For dry signal, we also need delay compensation
-            for (int i = 0; i < numSamples; ++i)
-            {
-                // Use the same effective delay for dry signal
-                int delayIdx = (i + MAX_FFT_SIZE < numSamples) ? i : i;  // Simplified - dry already stored
-                float drySample = drySignal[static_cast<size_t>(i)];
-                channelData[i] = drySample * (1.0f - currentDryWet) + channelData[i] * currentDryWet;
-            }
+            // Delay dry signal by full reported latency (MAX_FFT_SIZE samples)
+            // This ensures dry and wet are time-aligned when mixed
+            auto& dryBuf = dryDelayBuffers[channel];
+            int bufSize = static_cast<int>(dryBuf.size());
+
+            // Write current dry sample
+            dryBuf[static_cast<size_t>(dryDelayWritePos[channel])] = drySignal[static_cast<size_t>(i)];
+
+            // Read delayed dry sample (MAX_FFT_SIZE samples behind)
+            int dryReadIdx = (dryDelayWritePos[channel] - MAX_FFT_SIZE + bufSize) % bufSize;
+            float delayedDrySample = dryBuf[static_cast<size_t>(dryReadIdx)];
+
+            // Advance write position
+            dryDelayWritePos[channel] = (dryDelayWritePos[channel] + 1) % bufSize;
+
+            // Mix delayed dry with wet
+            channelData[i] = delayedDrySample * (1.0f - currentDryWet) + wetSample * currentDryWet;
         }
     }
 }

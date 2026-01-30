@@ -2,6 +2,18 @@
 
 All notable changes to the Frequency Shifter plugin will be documented in this file.
 
+## [v42-DryTiming] - 2026-01-30
+
+### Fixed
+- Dry signal timing: dry signal now properly delayed by full reported latency (4096 samples)
+- Dry and wet signals are now time-aligned when mixed
+
+### Technical Details
+- Added dedicated dry delay buffer per channel
+- Dry signal path: Input → Dry delay buffer (4096 samples) → Mix
+- Wet signal path: Input → FFT processing → Internal compensation → Mix
+- Both paths now have equal latency, ensuring proper phase alignment
+
 ## [v41-SmearControl] - 2026-01-30
 
 ### Added
