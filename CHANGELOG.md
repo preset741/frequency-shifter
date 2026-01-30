@@ -2,6 +2,24 @@
 
 All notable changes to the Frequency Shifter plugin will be documented in this file.
 
+## [v43-QuantizeFix] - 2026-01-30
+
+### Fixed
+- **Phase 2A.1 - Accumulation Normalization**: When multiple source bins quantize to the same target bin, energy is now normalized by sqrt(N) instead of simple summation, preventing energy buildup
+- **Phase 2A.2 - Total Energy Normalization**: Total spectral energy is now preserved through quantization, ensuring consistent volume regardless of scale/quantization settings
+- **Phase 2A.3 - Phase Continuity**: Replaced "loudest bin wins" phase selection with persistent MIDI note-based phase accumulators, providing smooth synthesis and natural decay
+
+### Technical Details
+- Phase accumulators indexed by MIDI note (0-127) for consistent phase across different FFT sizes
+- Energy normalization: scaleFactor = sqrt(energyBefore / energyAfter) applied after quantization
+- Phase increment per note: phaseIncrement = 2π × noteFreq × hopSize / sampleRate
+- All 128 MIDI note phases updated every frame for continuous phase evolution
+
+### Expected Improvements
+- Natural decay without artificial sustain/release artifacts
+- Stable volume without runaway energy buildup
+- Different sources maintain distinct character (no convergence to same timbre)
+
 ## [v42-DryTiming] - 2026-01-30
 
 ### Fixed

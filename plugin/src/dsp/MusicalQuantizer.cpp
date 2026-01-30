@@ -5,11 +5,37 @@
 namespace fshift
 {
 
+// Two-pi constant for phase calculations
+static constexpr float TWO_PI = 6.283185307179586f;
+static constexpr float PI = 3.14159265359f;
+
 MusicalQuantizer::MusicalQuantizer(int rootMidi, ScaleType scaleType)
     : rootMidi(rootMidi),
       scaleType(scaleType),
       scaleDegrees(fshift::getScaleDegrees(scaleType))
 {
+    // Initialize all phase accumulators to zero
+    midiPhaseAccumulators.fill(0.0f);
+}
+
+void MusicalQuantizer::prepare(double sampleRate, int /*fftSize*/, int hopSize)
+{
+    // Only reinitialize if parameters changed
+    if (sampleRate == cachedSampleRate && hopSize == cachedHopSize && prepared)
+        return;
+
+    cachedSampleRate = sampleRate;
+    cachedHopSize = hopSize;
+
+    // Reset phase accumulators when settings change
+    midiPhaseAccumulators.fill(0.0f);
+
+    prepared = true;
+}
+
+void MusicalQuantizer::reset()
+{
+    midiPhaseAccumulators.fill(0.0f);
 }
 
 void MusicalQuantizer::setRootNote(int newRootMidi)
@@ -82,11 +108,21 @@ std::pair<std::vector<float>, std::vector<float>> MusicalQuantizer::quantizeSpec
     float binResolution = static_cast<float>(sampleRate) / static_cast<float>(fftSize);
 
     // Initialize output arrays
-    std::vector<float> quantizedMagnitude(numBins, 0.0f);
-    std::vector<float> quantizedPhase(numBins, 0.0f);
+    std::vector<float> quantizedMagnitude(static_cast<size_t>(numBins), 0.0f);
+    std::vector<float> quantizedPhase(static_cast<size_t>(numBins), 0.0f);
 
-    // Track which bins have received energy and their max magnitude
-    std::vector<float> maxMagnitudeAtBin(numBins, 0.0f);
+    // Phase 2A.1: Track contributor count per target bin for accumulation normalization
+    std::vector<int> contributorCount(static_cast<size_t>(numBins), 0);
+
+    // Track target MIDI note for each target bin (for phase continuity)
+    std::vector<int> targetMidiNotes(static_cast<size_t>(numBins), -1);
+
+    // Phase 2A.2: Calculate total energy BEFORE quantization
+    float energyBefore = 0.0f;
+    for (int k = 0; k < numBins; ++k)
+    {
+        energyBefore += magnitude[static_cast<size_t>(k)] * magnitude[static_cast<size_t>(k)];
+    }
 
     // Calculate bin frequencies and target bins
     for (int k = 0; k < numBins; ++k)
@@ -95,27 +131,127 @@ std::pair<std::vector<float>, std::vector<float>> MusicalQuantizer::quantizeSpec
         if (binFreq <= 0.0f)
             continue;
 
-        // Quantize bin frequency
-        float quantizedFreq = quantizeFrequency(binFreq, strength);
+        // Get the target MIDI note for this frequency
+        float midiNote = tuning::freqToMidi(binFreq);
+        int quantizedMidi = tuning::quantizeToScale(midiNote, rootMidi, scaleDegrees);
+        float quantizedFreq = tuning::midiToFreq(static_cast<float>(quantizedMidi));
+
+        // Interpolate frequency based on strength
+        float targetFreq = (1.0f - strength) * binFreq + strength * quantizedFreq;
 
         // Apply drift if provided
         if (driftCents != nullptr && static_cast<size_t>(k) < driftCents->size())
         {
-            quantizedFreq = applyDriftCents(quantizedFreq, (*driftCents)[static_cast<size_t>(k)]);
+            targetFreq = applyDriftCents(targetFreq, (*driftCents)[static_cast<size_t>(k)]);
         }
 
         // Calculate target bin
-        int targetBin = static_cast<int>(std::round(quantizedFreq / binResolution));
+        int targetBin = static_cast<int>(std::round(targetFreq / binResolution));
         targetBin = std::clamp(targetBin, 0, numBins - 1);
 
-        // Accumulate magnitude (energy conservation)
-        quantizedMagnitude[targetBin] += magnitude[k];
+        // Accumulate magnitude (will normalize later)
+        quantizedMagnitude[static_cast<size_t>(targetBin)] += magnitude[static_cast<size_t>(k)];
+        contributorCount[static_cast<size_t>(targetBin)]++;
 
-        // Use phase from strongest contributor
-        if (magnitude[k] > maxMagnitudeAtBin[targetBin])
+        // Store target MIDI note for phase continuity
+        // (use the MIDI note for the target frequency at full strength)
+        if (strength > 0.5f)
         {
-            maxMagnitudeAtBin[targetBin] = magnitude[k];
-            quantizedPhase[targetBin] = phase[k];
+            targetMidiNotes[static_cast<size_t>(targetBin)] = std::clamp(quantizedMidi, 0, NUM_MIDI_NOTES - 1);
+        }
+    }
+
+    // Phase 2A.1: Apply accumulation normalization
+    // When multiple bins map to same target, normalize by sqrt(contributorCount)
+    for (int k = 0; k < numBins; ++k)
+    {
+        if (contributorCount[static_cast<size_t>(k)] > 1)
+        {
+            quantizedMagnitude[static_cast<size_t>(k)] /= std::sqrt(static_cast<float>(contributorCount[static_cast<size_t>(k)]));
+        }
+    }
+
+    // Phase 2A.2: Calculate total energy AFTER quantization and normalize
+    float energyAfter = 0.0f;
+    for (int k = 0; k < numBins; ++k)
+    {
+        energyAfter += quantizedMagnitude[static_cast<size_t>(k)] * quantizedMagnitude[static_cast<size_t>(k)];
+    }
+
+    // Apply energy normalization scale factor
+    if (energyAfter > 1e-10f)
+    {
+        float scaleFactor = std::sqrt(energyBefore / energyAfter);
+        for (int k = 0; k < numBins; ++k)
+        {
+            quantizedMagnitude[static_cast<size_t>(k)] *= scaleFactor;
+        }
+    }
+
+    // Phase 2A.3: Phase continuity using persistent MIDI note-based phase accumulators
+    if (prepared && cachedSampleRate > 0.0 && cachedHopSize > 0)
+    {
+        // Update phase accumulators for ALL MIDI notes (maintains continuity even when notes aren't active)
+        for (int midi = 0; midi < NUM_MIDI_NOTES; ++midi)
+        {
+            float noteFreq = tuning::midiToFreq(static_cast<float>(midi));
+            // phaseIncrement = 2*PI * frequency * hopSize / sampleRate
+            float phaseIncrement = TWO_PI * noteFreq * static_cast<float>(cachedHopSize) / static_cast<float>(cachedSampleRate);
+            midiPhaseAccumulators[static_cast<size_t>(midi)] += phaseIncrement;
+
+            // Wrap to [-PI, PI] for numerical stability
+            while (midiPhaseAccumulators[static_cast<size_t>(midi)] > PI)
+                midiPhaseAccumulators[static_cast<size_t>(midi)] -= TWO_PI;
+            while (midiPhaseAccumulators[static_cast<size_t>(midi)] < -PI)
+                midiPhaseAccumulators[static_cast<size_t>(midi)] += TWO_PI;
+        }
+
+        // Assign phases to output bins based on their target MIDI notes
+        for (int k = 0; k < numBins; ++k)
+        {
+            if (quantizedMagnitude[static_cast<size_t>(k)] > 1e-10f)
+            {
+                int midiNote = targetMidiNotes[static_cast<size_t>(k)];
+                if (midiNote >= 0 && midiNote < NUM_MIDI_NOTES)
+                {
+                    // Use the persistent phase for this MIDI note
+                    quantizedPhase[static_cast<size_t>(k)] = midiPhaseAccumulators[static_cast<size_t>(midiNote)];
+                }
+                else
+                {
+                    // Fallback: calculate phase based on bin frequency
+                    float binFreq = static_cast<float>(k) * binResolution;
+                    float phaseIncrement = TWO_PI * binFreq * static_cast<float>(cachedHopSize) / static_cast<float>(cachedSampleRate);
+                    quantizedPhase[static_cast<size_t>(k)] = std::fmod(phaseIncrement, TWO_PI);
+                }
+            }
+        }
+    }
+    else
+    {
+        // Fallback: use phase from strongest contributor (original behavior)
+        std::vector<float> maxMagnitudeAtBin(static_cast<size_t>(numBins), 0.0f);
+
+        for (int k = 0; k < numBins; ++k)
+        {
+            float binFreq = static_cast<float>(k) * binResolution;
+            if (binFreq <= 0.0f)
+                continue;
+
+            float quantizedFreq = quantizeFrequency(binFreq, strength);
+            if (driftCents != nullptr && static_cast<size_t>(k) < driftCents->size())
+            {
+                quantizedFreq = applyDriftCents(quantizedFreq, (*driftCents)[static_cast<size_t>(k)]);
+            }
+
+            int targetBin = static_cast<int>(std::round(quantizedFreq / binResolution));
+            targetBin = std::clamp(targetBin, 0, numBins - 1);
+
+            if (magnitude[static_cast<size_t>(k)] > maxMagnitudeAtBin[static_cast<size_t>(targetBin)])
+            {
+                maxMagnitudeAtBin[static_cast<size_t>(targetBin)] = magnitude[static_cast<size_t>(k)];
+                quantizedPhase[static_cast<size_t>(targetBin)] = phase[static_cast<size_t>(k)];
+            }
         }
     }
 

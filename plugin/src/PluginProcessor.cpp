@@ -604,6 +604,12 @@ void FrequencyShifterProcessor::reinitializeDsp()
     driftModulator.prepare(currentSampleRate, MAX_FFT_SIZE / 2);
     driftModulator.reset();
 
+    // Prepare quantizer with primary FFT settings for phase continuity (Phase 2A.3)
+    if (quantizer)
+    {
+        quantizer->prepare(currentSampleRate, currentFftSizes[0], currentHopSizes[0]);
+    }
+
     // Pre-compute spectral mask curve with max FFT size
     spectralMask.computeMaskCurve(currentSampleRate, MAX_FFT_SIZE);
     maskNeedsUpdate.store(false);
