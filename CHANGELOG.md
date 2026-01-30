@@ -2,6 +2,41 @@
 
 All notable changes to the Frequency Shifter plugin will be documented in this file.
 
+## [v47-PhaseBlend] - 2026-01-30
+
+### Fixed
+- **Enhanced Mode now works with partial quantization**: Previously, Enhanced Mode (phase vocoder) had no effect beyond ~2% quantization because phase accumulators were completely overriding the phase vocoder output for remapped bins
+
+### Technical Details
+- Phase blending now respects quantization strength parameter:
+  - At strength=0%: 100% input phase (phase vocoder output if Enhanced Mode on)
+  - At strength=100%: 100% quantized phase (MIDI note phase accumulator)
+  - At strength=30%: 70% phase vocoder + 30% phase accumulator blend
+- Uses circular interpolation for phase blending to handle wraparound at ±π boundary
+- Non-remapped bins always preserve input phase (phase vocoder coherence maintained)
+
+### Expected Behaviour
+- At 30% quantization with Enhanced Mode ON, sustained sounds should have audibly different character than Enhanced Mode OFF
+- Phase vocoder's formant preservation and pitch stability should be more apparent at lower quantization amounts
+
+## [v46-WeightedSmooth] - 2026-01-30
+
+### Fixed
+- **Strategy A - Weighted Energy Distribution**: Instead of mapping 100% energy to nearest scale bin, now distributes energy between the two closest scale-legal bins based on inverse distance weighting
+- **Strategy C - Magnitude Smoothing**: Applied 3-tap moving average [0.25, 0.5, 0.25] after quantization to reduce sharp spectral peaks/pits
+
+### Technical Details
+- `findTwoNearestScaleFrequencies()`: Finds lower and upper scale frequencies, calculates inverse-distance weights using log-frequency (cents) for perceptually uniform distribution
+- Energy distribution: If input is closer to lower note, lower bin gets more energy; closer to upper note, upper bin gets more energy
+- Smoothing applied after accumulation normalization but before energy normalization to preserve total energy
+- Boundary conditions: First and last bins unchanged during smoothing
+
+### Expected Improvements
+- Smoother spectral distribution reduces "picket fence" effect from hard quantization
+- Reduced resonance buildup at isolated frequency peaks
+- More natural timbral transitions between scale degrees
+- Less harsh artifacts during transients
+
 ## [v45-DecayFix] - 2026-01-30
 
 ### Fixed

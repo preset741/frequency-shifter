@@ -127,6 +127,28 @@ private:
      */
     static float applyDriftCents(float frequency, float cents);
 
+    /**
+     * Strategy A: Find the two nearest scale frequencies and their weights.
+     * Distributes energy based on inverse distance weighting.
+     *
+     * @param frequency Input frequency in Hz
+     * @param[out] lowerFreq Lower scale frequency
+     * @param[out] upperFreq Upper scale frequency
+     * @param[out] lowerWeight Weight for lower frequency (0-1)
+     * @param[out] upperWeight Weight for upper frequency (0-1)
+     */
+    void findTwoNearestScaleFrequencies(float frequency,
+                                         float& lowerFreq, float& upperFreq,
+                                         float& lowerWeight, float& upperWeight) const;
+
+    /**
+     * Strategy C: Apply magnitude smoothing (3-tap moving average).
+     * Kernel: [0.25, 0.5, 0.25]
+     *
+     * @param magnitude Input magnitude spectrum (modified in place)
+     */
+    static void applyMagnitudeSmoothing(std::vector<float>& magnitude);
+
     int rootMidi;
     ScaleType scaleType;
     std::vector<int> scaleDegrees;
