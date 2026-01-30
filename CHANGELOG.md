@@ -2,6 +2,27 @@
 
 All notable changes to the Frequency Shifter plugin will be documented in this file.
 
+## [v45-DecayFix] - 2026-01-30
+
+### Fixed
+- **Tinnitus/Ringing Elimination**: Phase accumulators now only run when MIDI notes have significant energy
+- **Natural Decay**: Notes decay naturally when input stops instead of sustaining indefinitely
+- **DC Offset Prevention**: DC bin (bin 0) is now explicitly zeroed to prevent low-frequency rumble
+
+### Technical Details
+- Added `silentFrameCount` per MIDI note - tracks consecutive frames below threshold
+- `MAGNITUDE_THRESHOLD = 0.001f` (~-60dB) gates phase accumulator updates
+- `SILENCE_FRAMES_TO_RESET = 8` frames (~185ms) before phase accumulator resets
+- Phase accumulators only increment when note magnitude > threshold
+- Below-threshold notes use strongest contributor's phase (natural decay behavior)
+- DC bin zeroed after quantization to prevent buildup
+
+### Expected Behavior
+- Sounds decay naturally when input stops
+- No perpetual tones at quantized frequencies
+- No tinnitus-like ringing after transients
+- Test: SHIFT=500Hz, SMEAR=100ms, QUANTIZE=100% - should decay cleanly
+
 ## [v44-PhasePreserve] - 2026-01-30
 
 ### Fixed

@@ -137,6 +137,14 @@ private:
     static constexpr int NUM_MIDI_NOTES = 128;
     std::array<float, NUM_MIDI_NOTES> midiPhaseAccumulators{};
 
+    // Silent frame counter per MIDI note - tracks how long since significant energy
+    // Resets phase accumulator after SILENCE_FRAMES_TO_RESET consecutive silent frames
+    std::array<int, NUM_MIDI_NOTES> silentFrameCount{};
+    static constexpr int SILENCE_FRAMES_TO_RESET = 8;  // ~185ms at 44.1kHz with 1024 hop
+
+    // Magnitude threshold for "active" note (linear, roughly -60dB)
+    static constexpr float MAGNITUDE_THRESHOLD = 0.001f;
+
     // Cached parameters for phase increment calculation
     double cachedSampleRate = 0.0;
     int cachedHopSize = 0;

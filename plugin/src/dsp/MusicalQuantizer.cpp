@@ -14,8 +14,9 @@ MusicalQuantizer::MusicalQuantizer(int rootMidi, ScaleType scaleType)
       scaleType(scaleType),
       scaleDegrees(fshift::getScaleDegrees(scaleType))
 {
-    // Initialize all phase accumulators to zero
+    // Initialize all phase accumulators and silence counters to zero
     midiPhaseAccumulators.fill(0.0f);
+    silentFrameCount.fill(0);
 }
 
 void MusicalQuantizer::prepare(double sampleRate, int /*fftSize*/, int hopSize)
@@ -27,8 +28,9 @@ void MusicalQuantizer::prepare(double sampleRate, int /*fftSize*/, int hopSize)
     cachedSampleRate = sampleRate;
     cachedHopSize = hopSize;
 
-    // Reset phase accumulators when settings change
+    // Reset phase accumulators and silence counters when settings change
     midiPhaseAccumulators.fill(0.0f);
+    silentFrameCount.fill(0);
 
     prepared = true;
 }
@@ -36,6 +38,7 @@ void MusicalQuantizer::prepare(double sampleRate, int /*fftSize*/, int hopSize)
 void MusicalQuantizer::reset()
 {
     midiPhaseAccumulators.fill(0.0f);
+    silentFrameCount.fill(0);
 }
 
 void MusicalQuantizer::setRootNote(int newRootMidi)
@@ -118,12 +121,15 @@ std::pair<std::vector<float>, std::vector<float>> MusicalQuantizer::quantizeSpec
     std::vector<int> targetMidiNotes(static_cast<size_t>(numBins), -1);
 
     // Track whether each target bin received energy from a DIFFERENT source bin (was remapped)
-    // If a bin's only contributor is itself (source == target), we should preserve input phase
     std::vector<bool> binWasRemapped(static_cast<size_t>(numBins), false);
 
-    // Track the strongest contributor's phase for each target bin (for non-remapped bins)
+    // Track the strongest contributor's phase for each target bin
     std::vector<float> maxMagnitudeAtBin(static_cast<size_t>(numBins), 0.0f);
     std::vector<float> strongestContributorPhase(static_cast<size_t>(numBins), 0.0f);
+
+    // Track which MIDI notes received energy this frame (for decay tracking)
+    std::array<float, NUM_MIDI_NOTES> midiNoteMagnitude{};
+    midiNoteMagnitude.fill(0.0f);
 
     // Phase 2A.2: Calculate total energy BEFORE quantization
     float energyBefore = 0.0f;
@@ -167,18 +173,18 @@ std::pair<std::vector<float>, std::vector<float>> MusicalQuantizer::quantizeSpec
         quantizedMagnitude[static_cast<size_t>(targetBin)] += magnitude[static_cast<size_t>(k)];
         contributorCount[static_cast<size_t>(targetBin)]++;
 
-        // Track strongest contributor's phase (for preserving input phase on non-remapped bins)
+        // Track strongest contributor's phase
         if (magnitude[static_cast<size_t>(k)] > maxMagnitudeAtBin[static_cast<size_t>(targetBin)])
         {
             maxMagnitudeAtBin[static_cast<size_t>(targetBin)] = magnitude[static_cast<size_t>(k)];
             strongestContributorPhase[static_cast<size_t>(targetBin)] = phase[static_cast<size_t>(k)];
         }
 
-        // Store target MIDI note for phase continuity (only for remapped bins)
-        // Use the MIDI note for the target frequency at full strength
-        if (strength > 0.5f && targetBin != k)
+        // Track MIDI note magnitude for decay tracking (only for remapped bins)
+        if (targetBin != k && quantizedMidi >= 0 && quantizedMidi < NUM_MIDI_NOTES)
         {
-            targetMidiNotes[static_cast<size_t>(targetBin)] = std::clamp(quantizedMidi, 0, NUM_MIDI_NOTES - 1);
+            midiNoteMagnitude[static_cast<size_t>(quantizedMidi)] += magnitude[static_cast<size_t>(k)];
+            targetMidiNotes[static_cast<size_t>(targetBin)] = quantizedMidi;
         }
     }
 
@@ -209,24 +215,40 @@ std::pair<std::vector<float>, std::vector<float>> MusicalQuantizer::quantizeSpec
         }
     }
 
-    // Phase 2A.3: Phase continuity - but ONLY for bins that were remapped
-    // For bins that weren't remapped (source == target), preserve input phase
-    // This allows phase vocoder's coherent phases to pass through for non-quantized bins
+    // Phase 2A.3: Phase continuity with magnitude gating and decay
     if (prepared && cachedSampleRate > 0.0 && cachedHopSize > 0)
     {
-        // Update phase accumulators for ALL MIDI notes (maintains continuity even when notes aren't active)
+        // Update silence counters and phase accumulators for each MIDI note
         for (int midi = 0; midi < NUM_MIDI_NOTES; ++midi)
         {
-            float noteFreq = tuning::midiToFreq(static_cast<float>(midi));
-            // phaseIncrement = 2*PI * frequency * hopSize / sampleRate
-            float phaseIncrement = TWO_PI * noteFreq * static_cast<float>(cachedHopSize) / static_cast<float>(cachedSampleRate);
-            midiPhaseAccumulators[static_cast<size_t>(midi)] += phaseIncrement;
+            if (midiNoteMagnitude[static_cast<size_t>(midi)] > MAGNITUDE_THRESHOLD)
+            {
+                // Note is active - reset silence counter, update phase accumulator
+                silentFrameCount[static_cast<size_t>(midi)] = 0;
 
-            // Wrap to [-PI, PI] for numerical stability
-            while (midiPhaseAccumulators[static_cast<size_t>(midi)] > PI)
-                midiPhaseAccumulators[static_cast<size_t>(midi)] -= TWO_PI;
-            while (midiPhaseAccumulators[static_cast<size_t>(midi)] < -PI)
-                midiPhaseAccumulators[static_cast<size_t>(midi)] += TWO_PI;
+                float noteFreq = tuning::midiToFreq(static_cast<float>(midi));
+                float phaseIncrement = TWO_PI * noteFreq * static_cast<float>(cachedHopSize) / static_cast<float>(cachedSampleRate);
+                midiPhaseAccumulators[static_cast<size_t>(midi)] += phaseIncrement;
+
+                // Wrap to [-PI, PI] for numerical stability
+                while (midiPhaseAccumulators[static_cast<size_t>(midi)] > PI)
+                    midiPhaseAccumulators[static_cast<size_t>(midi)] -= TWO_PI;
+                while (midiPhaseAccumulators[static_cast<size_t>(midi)] < -PI)
+                    midiPhaseAccumulators[static_cast<size_t>(midi)] += TWO_PI;
+            }
+            else
+            {
+                // Note is silent - increment silence counter
+                silentFrameCount[static_cast<size_t>(midi)]++;
+
+                // If silent for too long, reset the phase accumulator
+                // This prevents tinnitus/ringing when input stops
+                if (silentFrameCount[static_cast<size_t>(midi)] >= SILENCE_FRAMES_TO_RESET)
+                {
+                    midiPhaseAccumulators[static_cast<size_t>(midi)] = 0.0f;
+                }
+                // Don't increment phase for silent notes - let them decay naturally
+            }
         }
 
         // Assign phases to output bins
@@ -236,16 +258,18 @@ std::pair<std::vector<float>, std::vector<float>> MusicalQuantizer::quantizeSpec
             {
                 if (binWasRemapped[static_cast<size_t>(k)])
                 {
-                    // This bin received energy from a different source bin - use phase accumulator
+                    // This bin received energy from a different source bin
                     int midiNote = targetMidiNotes[static_cast<size_t>(k)];
-                    if (midiNote >= 0 && midiNote < NUM_MIDI_NOTES)
+                    if (midiNote >= 0 && midiNote < NUM_MIDI_NOTES &&
+                        midiNoteMagnitude[static_cast<size_t>(midiNote)] > MAGNITUDE_THRESHOLD)
                     {
-                        // Use the persistent phase for this MIDI note
+                        // Use the persistent phase for this active MIDI note
                         quantizedPhase[static_cast<size_t>(k)] = midiPhaseAccumulators[static_cast<size_t>(midiNote)];
                     }
                     else
                     {
-                        // Fallback: use strongest contributor's phase
+                        // Note is below threshold or invalid - use strongest contributor's phase
+                        // This provides natural decay behavior
                         quantizedPhase[static_cast<size_t>(k)] = strongestContributorPhase[static_cast<size_t>(k)];
                     }
                 }
@@ -265,6 +289,13 @@ std::pair<std::vector<float>, std::vector<float>> MusicalQuantizer::quantizeSpec
         {
             quantizedPhase[static_cast<size_t>(k)] = strongestContributorPhase[static_cast<size_t>(k)];
         }
+    }
+
+    // Zero DC bin to prevent low-frequency rumble/buildup
+    if (numBins > 0)
+    {
+        quantizedMagnitude[0] = 0.0f;
+        quantizedPhase[0] = 0.0f;
     }
 
     return { quantizedMagnitude, quantizedPhase };
