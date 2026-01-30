@@ -431,6 +431,39 @@ FrequencyShifterEditor::FrequencyShifterEditor(FrequencyShifterProcessor& p)
     setupLabel(quantizeLabel, "QUANTIZE");
     addAndMakeVisible(quantizeLabel);
 
+    // Setup preserve slider (Phase 2B: Envelope preservation)
+    setupSlider(preserveSlider, juce::Slider::LinearHorizontal);
+    preserveSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
+    preserveSlider.setNumDecimalPlacesToDisplay(1);
+    addAndMakeVisible(preserveSlider);
+    preserveAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_PRESERVE, preserveSlider);
+
+    setupLabel(preserveLabel, "PRESERVE");
+    addAndMakeVisible(preserveLabel);
+
+    // Setup transients slider (Phase 2B: Transient bypass)
+    setupSlider(transientsSlider, juce::Slider::LinearHorizontal);
+    transientsSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
+    transientsSlider.setNumDecimalPlacesToDisplay(1);
+    addAndMakeVisible(transientsSlider);
+    transientsAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_TRANSIENTS, transientsSlider);
+
+    setupLabel(transientsLabel, "TRANSIENT");
+    addAndMakeVisible(transientsLabel);
+
+    // Setup sensitivity slider (Phase 2B: Transient detection threshold)
+    setupSlider(sensitivitySlider, juce::Slider::LinearHorizontal);
+    sensitivitySlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
+    sensitivitySlider.setNumDecimalPlacesToDisplay(1);
+    addAndMakeVisible(sensitivitySlider);
+    sensitivityAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_SENSITIVITY, sensitivitySlider);
+
+    setupLabel(sensitivityLabel, "SENS");
+    addAndMakeVisible(sensitivityLabel);
+
     // Setup root note combo (just 12 pitch classes - octave is irrelevant for scale quantization)
     for (const auto& note : { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" })
     {
@@ -695,14 +728,14 @@ FrequencyShifterEditor::FrequencyShifterEditor(FrequencyShifterProcessor& p)
 
         // Resize window when spectrum is toggled
         if (spectrumVisible)
-            setSize(640, 770);
+            setSize(640, 830);
         else
-            setSize(640, 610);
+            setSize(640, 670);
     };
     addAndMakeVisible(spectrumButton);
 
-    // Set editor size
-    setSize(640, 610);
+    // Set editor size (increased by 60 to accommodate Phase 2B controls)
+    setSize(640, 670);
 }
 
 FrequencyShifterEditor::~FrequencyShifterEditor()
@@ -793,78 +826,90 @@ void FrequencyShifterEditor::resized()
     quantizeLabel.setBounds(rightPanelX, 150, labelWidth, 20);
     quantizeSlider.setBounds(rightPanelX + labelWidth, 148, controlWidth, 24);
 
-    phaseVocoderButton.setBounds(rightPanelX, 185, 200, 24);
+    // Phase 2B: Envelope preservation (near QUANTIZE)
+    preserveLabel.setBounds(rightPanelX, 180, labelWidth, 20);
+    preserveSlider.setBounds(rightPanelX + labelWidth, 178, controlWidth, 24);
 
-    smearLabel.setBounds(rightPanelX, 220, labelWidth, 20);
-    smearSlider.setBounds(rightPanelX + labelWidth, 218, controlWidth, 24);
+    // Phase 2B: Transient controls (on same row, split width)
+    const int transientControlWidth = 115;
+    transientsLabel.setBounds(rightPanelX, 210, 65, 20);
+    transientsSlider.setBounds(rightPanelX + 65, 208, transientControlWidth, 24);
 
-    // Mix controls - bottom panel row 1
-    dryWetLabel.setBounds(40, 295, 70, 20);
-    dryWetSlider.setBounds(110, 293, 380, 24);
-    spectrumButton.setBounds(510, 293, 100, 24);
+    sensitivityLabel.setBounds(rightPanelX + 190, 210, 40, 20);
+    sensitivitySlider.setBounds(rightPanelX + 230, 208, transientControlWidth, 24);
+
+    phaseVocoderButton.setBounds(rightPanelX, 245, 200, 24);
+
+    smearLabel.setBounds(rightPanelX, 280, labelWidth, 20);
+    smearSlider.setBounds(rightPanelX + labelWidth, 278, controlWidth, 24);
+
+    // Mix controls - bottom panel row 1 (shifted down by 60 to accommodate new controls)
+    dryWetLabel.setBounds(40, 355, 70, 20);
+    dryWetSlider.setBounds(110, 353, 380, 24);
+    spectrumButton.setBounds(510, 353, 100, 24);
 
     // Drift controls - bottom panel row 2
-    driftAmountLabel.setBounds(40, 330, 50, 20);
-    driftAmountSlider.setBounds(90, 328, 160, 24);
+    driftAmountLabel.setBounds(40, 390, 50, 20);
+    driftAmountSlider.setBounds(90, 388, 160, 24);
 
-    driftRateLabel.setBounds(265, 330, 40, 20);
-    driftRateSlider.setBounds(305, 328, 140, 24);
+    driftRateLabel.setBounds(265, 390, 40, 20);
+    driftRateSlider.setBounds(305, 388, 140, 24);
 
-    driftModeLabel.setBounds(460, 330, 45, 20);
-    driftModeCombo.setBounds(505, 328, 105, 24);
+    driftModeLabel.setBounds(460, 390, 45, 20);
+    driftModeCombo.setBounds(505, 388, 105, 24);
 
     // Stochastic controls - bottom panel row 3
-    stochasticTypeLabel.setBounds(40, 365, 40, 20);
-    stochasticTypeCombo.setBounds(80, 363, 130, 24);
+    stochasticTypeLabel.setBounds(40, 425, 40, 20);
+    stochasticTypeCombo.setBounds(80, 423, 130, 24);
 
-    stochasticDensityLabel.setBounds(225, 365, 60, 20);
-    stochasticDensitySlider.setBounds(285, 363, 120, 24);
+    stochasticDensityLabel.setBounds(225, 425, 60, 20);
+    stochasticDensitySlider.setBounds(285, 423, 120, 24);
 
-    stochasticSmoothnessLabel.setBounds(420, 365, 60, 20);
-    stochasticSmoothnessSlider.setBounds(480, 363, 130, 24);
+    stochasticSmoothnessLabel.setBounds(420, 425, 60, 20);
+    stochasticSmoothnessSlider.setBounds(480, 423, 130, 24);
 
-    // Mask controls - row 1: toggle, mode, transition
-    maskEnabledButton.setBounds(30, 450, 60, 24);
+    // Mask controls - row 1: toggle, mode, transition (shifted down by 60)
+    maskEnabledButton.setBounds(30, 510, 60, 24);
 
-    maskModeLabel.setBounds(100, 452, 45, 20);
-    maskModeCombo.setBounds(145, 450, 100, 24);
+    maskModeLabel.setBounds(100, 512, 45, 20);
+    maskModeCombo.setBounds(145, 510, 100, 24);
 
-    maskTransitionLabel.setBounds(260, 452, 45, 20);
-    maskTransitionSlider.setBounds(305, 450, 120, 24);
+    maskTransitionLabel.setBounds(260, 512, 45, 20);
+    maskTransitionSlider.setBounds(305, 510, 120, 24);
 
     // Mask controls - row 2: low and high frequency (wider sliders)
-    maskLowFreqLabel.setBounds(30, 487, 35, 20);
-    maskLowFreqSlider.setBounds(65, 485, 250, 24);
+    maskLowFreqLabel.setBounds(30, 547, 35, 20);
+    maskLowFreqSlider.setBounds(65, 545, 250, 24);
 
-    maskHighFreqLabel.setBounds(330, 487, 40, 20);
-    maskHighFreqSlider.setBounds(370, 485, 240, 24);
+    maskHighFreqLabel.setBounds(330, 547, 40, 20);
+    maskHighFreqSlider.setBounds(370, 545, 240, 24);
 
     // Delay controls - row 1: toggle, time, slope
-    delayEnabledButton.setBounds(30, 540, 60, 24);
+    delayEnabledButton.setBounds(30, 600, 60, 24);
 
-    delayTimeLabel.setBounds(100, 542, 40, 20);
-    delayTimeSlider.setBounds(140, 540, 140, 24);
+    delayTimeLabel.setBounds(100, 602, 40, 20);
+    delayTimeSlider.setBounds(140, 600, 140, 24);
 
-    delaySlopeLabel.setBounds(295, 542, 45, 20);
-    delaySlopeSlider.setBounds(340, 540, 120, 24);
+    delaySlopeLabel.setBounds(295, 602, 45, 20);
+    delaySlopeSlider.setBounds(340, 600, 120, 24);
 
-    delayMixLabel.setBounds(475, 542, 30, 20);
-    delayMixSlider.setBounds(505, 540, 105, 24);
+    delayMixLabel.setBounds(475, 602, 30, 20);
+    delayMixSlider.setBounds(505, 600, 105, 24);
 
     // Delay controls - row 2: feedback, damping, gain
-    delayFeedbackLabel.setBounds(30, 572, 40, 20);
-    delayFeedbackSlider.setBounds(70, 570, 120, 24);
+    delayFeedbackLabel.setBounds(30, 632, 40, 20);
+    delayFeedbackSlider.setBounds(70, 630, 120, 24);
 
-    delayDampingLabel.setBounds(200, 572, 45, 20);
-    delayDampingSlider.setBounds(245, 570, 120, 24);
+    delayDampingLabel.setBounds(200, 632, 45, 20);
+    delayDampingSlider.setBounds(245, 630, 120, 24);
 
-    delayGainLabel.setBounds(380, 572, 40, 20);
-    delayGainSlider.setBounds(420, 570, 120, 24);
+    delayGainLabel.setBounds(380, 632, 40, 20);
+    delayGainSlider.setBounds(420, 630, 120, 24);
 
     // Spectrum analyzer (below main controls when visible)
     if (spectrumAnalyzer && spectrumVisible)
     {
-        spectrumAnalyzer->setBounds(20, 615, 600, 145);
+        spectrumAnalyzer->setBounds(20, 675, 600, 145);
     }
 }
 

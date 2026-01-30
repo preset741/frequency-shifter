@@ -34,6 +34,9 @@ FrequencyShifterProcessor::FrequencyShifterProcessor()
     parameters.addParameterListener(PARAM_DELAY_DAMPING, this);
     parameters.addParameterListener(PARAM_DELAY_MIX, this);
     parameters.addParameterListener(PARAM_DELAY_GAIN, this);
+    parameters.addParameterListener(PARAM_PRESERVE, this);
+    parameters.addParameterListener(PARAM_TRANSIENTS, this);
+    parameters.addParameterListener(PARAM_SENSITIVITY, this);
 
     // Initialize quantizer with default scale (C Major)
     quantizer = std::make_unique<fshift::MusicalQuantizer>(60, fshift::ScaleType::Major);
@@ -66,6 +69,9 @@ FrequencyShifterProcessor::~FrequencyShifterProcessor()
     parameters.removeParameterListener(PARAM_DELAY_DAMPING, this);
     parameters.removeParameterListener(PARAM_DELAY_MIX, this);
     parameters.removeParameterListener(PARAM_DELAY_GAIN, this);
+    parameters.removeParameterListener(PARAM_PRESERVE, this);
+    parameters.removeParameterListener(PARAM_TRANSIENTS, this);
+    parameters.removeParameterListener(PARAM_SENSITIVITY, this);
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout FrequencyShifterProcessor::createParameterLayout()
@@ -320,6 +326,33 @@ juce::AudioProcessorValueTreeState::ParameterLayout FrequencyShifterProcessor::c
         0.0f,
         juce::AudioParameterFloatAttributes().withLabel("dB")));
 
+    // === Phase 2B: Envelope Preservation and Transient Detection ===
+
+    // PRESERVE: Spectral envelope preservation (0-100%)
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID{ PARAM_PRESERVE, 1 },
+        "Preserve",
+        juce::NormalisableRange<float>(0.0f, 100.0f, 0.1f),
+        0.0f,
+        juce::AudioParameterFloatAttributes().withLabel("%")));
+
+    // TRANSIENTS: How much transient frames bypass quantization (0-100%)
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID{ PARAM_TRANSIENTS, 1 },
+        "Transients",
+        juce::NormalisableRange<float>(0.0f, 100.0f, 0.1f),
+        0.0f,
+        juce::AudioParameterFloatAttributes().withLabel("%")));
+
+    // SENSITIVITY: Transient detection threshold (0-100%)
+    // 0% = 3x energy ratio, 100% = 1.2x ratio, default 50% = 1.5x
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID{ PARAM_SENSITIVITY, 1 },
+        "Sensitivity",
+        juce::NormalisableRange<float>(0.0f, 100.0f, 0.1f),
+        50.0f,
+        juce::AudioParameterFloatAttributes().withLabel("%")));
+
     return { params.begin(), params.end() };
 }
 
@@ -481,12 +514,42 @@ void FrequencyShifterProcessor::parameterChanged(const juce::String& parameterID
             for (auto& delay : chDelays)
                 delay.setGain(newValue);
     }
+    else if (parameterID == PARAM_PRESERVE)
+    {
+        preserveAmount.store(newValue / 100.0f);
+        if (quantizer)
+            quantizer->setPreserveAmount(newValue / 100.0f);
+    }
+    else if (parameterID == PARAM_TRANSIENTS)
+    {
+        transientAmount.store(newValue / 100.0f);
+        if (quantizer)
+            quantizer->setTransientAmount(newValue / 100.0f);
+    }
+    else if (parameterID == PARAM_SENSITIVITY)
+    {
+        transientSensitivity.store(newValue / 100.0f);
+        if (quantizer)
+            quantizer->setTransientSensitivity(newValue / 100.0f);
+    }
 }
 
 void FrequencyShifterProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
     currentSampleRate = sampleRate;
     currentBlockSize = samplesPerBlock;
+
+    // Phase 2B+ Amplitude envelope follower coefficients
+    // Attack: ~1ms for fast transient response
+    // Release: ~50ms for smooth decay
+    float attackTimeMs = 1.0f;
+    float releaseTimeMs = 50.0f;
+    envAttackCoeff = std::exp(-1.0f / (static_cast<float>(sampleRate) * attackTimeMs / 1000.0f));
+    envReleaseCoeff = std::exp(-1.0f / (static_cast<float>(sampleRate) * releaseTimeMs / 1000.0f));
+
+    // Reset envelope states
+    inputEnvelope.fill(0.0f);
+    outputEnvelope.fill(0.0f);
 
     // Initialize with current quality mode
     reinitializeDsp();
@@ -764,6 +827,17 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
                             dryPhase = phase;
                         }
 
+                        // Phase 2B: Capture spectral envelope from INPUT before any processing
+                        // This is crucial for accurate timbre preservation
+                        std::vector<float> inputEnvelope;
+                        const std::vector<float>* envelopePtr = nullptr;
+                        float currentPreserve = preserveAmount.load();
+                        if (currentPreserve > 0.01f && quantizer && currentQuantizeStrength > 0.01f)
+                        {
+                            inputEnvelope = quantizer->getSpectralEnvelope(magnitude, currentSampleRate, fftSize);
+                            envelopePtr = &inputEnvelope;
+                        }
+
                         // Apply phase vocoder if enabled
                         if (currentUsePhaseVocoder && std::abs(currentShiftHz) > 0.01f)
                         {
@@ -800,8 +874,9 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
                                 }
                             }
 
+                            // Pass the pre-shift envelope for accurate timbre preservation
                             std::tie(magnitude, phase) = quantizer->quantizeSpectrum(
-                                magnitude, phase, currentSampleRate, fftSize, currentQuantizeStrength, driftPtr);
+                                magnitude, phase, currentSampleRate, fftSize, currentQuantizeStrength, driftPtr, envelopePtr);
                         }
 
                         // Apply spectral mask (blend wet/dry per frequency bin)
@@ -902,7 +977,56 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
             // Advance write position
             dryDelayWritePos[channel] = (dryDelayWritePos[channel] + 1) % bufSize;
 
-            // Mix delayed dry with wet
+            // Phase 2B+ Amplitude envelope tracking and correction
+            // Tied to PRESERVE control - at 100%, both spectral AND amplitude dynamics match input
+            float currentPreserve = preserveAmount.load();
+            if (currentPreserve > 0.01f && !bypassProcessing)
+            {
+                // Track input amplitude envelope (from delayed dry signal, time-aligned)
+                float inputAbs = std::abs(delayedDrySample);
+                if (inputAbs > inputEnvelope[static_cast<size_t>(channel)])
+                {
+                    // Attack: fast rise
+                    inputEnvelope[static_cast<size_t>(channel)] =
+                        inputAbs + envAttackCoeff * (inputEnvelope[static_cast<size_t>(channel)] - inputAbs);
+                }
+                else
+                {
+                    // Release: slow decay
+                    inputEnvelope[static_cast<size_t>(channel)] =
+                        inputAbs + envReleaseCoeff * (inputEnvelope[static_cast<size_t>(channel)] - inputAbs);
+                }
+
+                // Track output amplitude envelope (from wet signal before correction)
+                float outputAbs = std::abs(wetSample);
+                if (outputAbs > outputEnvelope[static_cast<size_t>(channel)])
+                {
+                    outputEnvelope[static_cast<size_t>(channel)] =
+                        outputAbs + envAttackCoeff * (outputEnvelope[static_cast<size_t>(channel)] - outputAbs);
+                }
+                else
+                {
+                    outputEnvelope[static_cast<size_t>(channel)] =
+                        outputAbs + envReleaseCoeff * (outputEnvelope[static_cast<size_t>(channel)] - outputAbs);
+                }
+
+                // Apply gain correction to match output envelope to input envelope
+                // Use non-linear strength (same curve as spectral preserve)
+                float effectiveStrength = std::pow(currentPreserve, 0.7f);
+                constexpr float epsilon = 1e-6f;
+                float gainCorrection = inputEnvelope[static_cast<size_t>(channel)] /
+                                       (outputEnvelope[static_cast<size_t>(channel)] + epsilon);
+
+                // Clamp correction to avoid extreme values (±12dB range)
+                gainCorrection = std::clamp(gainCorrection, 0.25f, 4.0f);
+
+                // Blend: at effectiveStrength=0, no correction; at 1, full correction
+                float blendedCorrection = 1.0f + effectiveStrength * (gainCorrection - 1.0f);
+
+                wetSample *= blendedCorrection;
+            }
+
+            // Mix delayed dry with (possibly corrected) wet
             channelData[i] = delayedDrySample * (1.0f - currentDryWet) + wetSample * currentDryWet;
         }
     }

@@ -2,6 +2,90 @@
 
 All notable changes to the Frequency Shifter plugin will be documented in this file.
 
+## [v50-PreserveExtreme] - 2026-01-30
+
+### Enhanced
+- **PRESERVE now much more extreme at high settings**:
+  - Non-linear scaling: `effectiveStrength = pow(preserveAmount, 0.7)` gives more effect at top
+  - Dynamic clamp limits based on PRESERVE setting:
+    - At 50%: ±18dB correction range
+    - At 100%: ±48dB correction range (nearly unclamped)
+  - High-resolution mode (96 bands, ~1/10 octave) activates at PRESERVE > 75%
+    - Double the bands for tighter spectral matching
+    - Extra aggressive clamp: ±36dB to ±60dB at 75%-100%
+
+- **NEW: Amplitude envelope tracking**:
+  - Tracks input amplitude envelope with fast attack (~1ms) and moderate release (~50ms)
+  - Tracks output amplitude envelope the same way
+  - Applies gain correction to match output dynamics to input dynamics
+  - Tied to PRESERVE control: at 100%, both spectral shape AND amplitude dynamics match input
+  - Correction clamped to ±12dB to avoid pumping
+
+### Technical Details
+- Non-linear response: `pow(x, 0.7)` curve makes 50% feel like ~62%, 75% feel like ~81%
+- Standard resolution (0-75%): 48 bands at ~1/5 octave spacing
+- High resolution (75-100%): 96 bands at ~1/10 octave spacing
+- Amplitude follower: `env = abs(sample) + coeff * (env - abs(sample))`
+  - Attack coeff: `exp(-1/(sr * 0.001))`
+  - Release coeff: `exp(-1/(sr * 0.05))`
+- Gain correction: `wetSample *= inputEnv / (outputEnv + epsilon)`
+
+### Expected Behaviour
+- At PRESERVE=100%: Both tonal character AND dynamics should closely match input
+- Bright sounds stay bright, dark sounds stay dark (spectral preservation)
+- Punchy attacks stay punchy, soft passages stay soft (amplitude preservation)
+- Two-stage behaviour: subtle at low settings, aggressive at high settings
+
+## [v49-PreserveFix] - 2026-01-30
+
+### Fixed
+- **PRESERVE now much more effective** - completely reworked envelope preservation:
+  - Increased resolution from 1/3 octave (24 bands) to 1/6 octave (48 bands)
+  - Changed from peak to RMS energy per band for more stable envelope estimation
+  - Raised correction clamp from ±12dB to ±36dB to handle aggressive quantization
+  - **Critical fix**: Envelope now captured from INPUT signal BEFORE shift/quantization
+  - Previously was capturing post-shift envelope, which defeated the purpose
+
+### Technical Details
+- 48 bands at ~1/6 octave spacing (2^(1/6) ≈ 1.122 intervals)
+- RMS energy per band: `sqrt(sum(mag²) / count)` instead of peak
+- Correction ratio range: 0.016 to 64 (±36dB)
+- New API: `getSpectralEnvelope()` to capture envelope externally
+- Processor now captures envelope before `shift()` and passes to `quantizeSpectrum()`
+
+### Expected Behaviour
+- Bright cymbal vs dark pad at PRESERVE=100%, QUANTIZE=100%: should retain distinct brightness
+- PRESERVE=100%: Quantized output matches original spectral balance closely
+- High quantization no longer "smears" all sounds to similar timbre
+
+## [v48-PreserveTransients] - 2026-01-30
+
+### Added
+- **Phase 2B.1 - Spectral Envelope Preservation (PRESERVE control)**:
+  - New PRESERVE slider (0-100%) maintains timbral character after quantization
+  - Captures spectral envelope at ~1/3 octave resolution using peak magnitudes
+  - Reimpose original envelope shape on quantized output
+  - Preserves formants and overall brightness after pitch quantization
+
+- **Phase 2B.2 - Transient Detection Bypass (TRANSIENT & SENS controls)**:
+  - New TRANSIENT slider (0-100%) controls how much transients bypass quantization
+  - New SENS slider (0-100%) adjusts detection sensitivity (0%=3x ratio, 100%=1.2x ratio)
+  - Compares spectral energy between frames to detect attacks
+  - Ramps quantization back up over 4 frames for smooth transitions
+  - At TRANSIENTS=100%, attacks pass through completely unquantized for punch
+
+### Technical Details
+- Envelope uses 24 bands covering 20Hz-20kHz at ~1/3 octave (bark-like) resolution
+- Peak magnitude per band (not average) for better transient response
+- Envelope correction clamped to ±12dB to avoid extreme boosts
+- Transient detection uses energy ratio threshold: `3.0 - sensitivity * 1.8`
+- Transient ramp-down over TRANSIENT_RAMP_FRAMES=4 frames (~93ms at default smear)
+
+### Expected Behaviour
+- PRESERVE=100%: Quantized output retains original brightness/darkness balance
+- TRANSIENTS=100% + SENS=50%: Drum attacks pass through unaffected, sustains quantized
+- Works well for preserving punch on percussive material while still quantizing held notes
+
 ## [v47-PhaseBlend] - 2026-01-30
 
 ### Fixed

@@ -88,6 +88,11 @@ public:
     static constexpr const char* PARAM_DELAY_MIX = "delayMix";
     static constexpr const char* PARAM_DELAY_GAIN = "delayGain";
 
+    // Phase 2B: Envelope preservation and transient detection
+    static constexpr const char* PARAM_PRESERVE = "preserve";          // 0-100%
+    static constexpr const char* PARAM_TRANSIENTS = "transients";      // 0-100%
+    static constexpr const char* PARAM_SENSITIVITY = "sensitivity";    // 0-100%
+
     // Valid FFT sizes for SMEAR control (at 44.1kHz)
     // 256 (~6ms), 512 (~12ms), 1024 (~23ms), 2048 (~46ms), 4096 (~93ms)
     static constexpr int FFT_SIZES[] = { 256, 512, 1024, 2048, 4096 };
@@ -160,6 +165,19 @@ private:
     std::atomic<float> delayDamping{ 30.0f };
     std::atomic<float> delayMix{ 50.0f };
     std::atomic<float> delayGain{ 0.0f };  // dB
+
+    // Phase 2B: Envelope preservation and transient detection
+    std::atomic<float> preserveAmount{ 0.0f };     // 0.0 - 1.0
+    std::atomic<float> transientAmount{ 0.0f };    // 0.0 - 1.0
+    std::atomic<float> transientSensitivity{ 0.5f }; // 0.0 - 1.0 (default 50%)
+
+    // Phase 2B+ Amplitude envelope tracking state (per channel)
+    // For matching output amplitude dynamics to input dynamics
+    std::array<float, MAX_CHANNELS> inputEnvelope{};   // Input amplitude follower
+    std::array<float, MAX_CHANNELS> outputEnvelope{};  // Output amplitude follower
+    // Envelope follower coefficients (computed in prepareToPlay)
+    float envAttackCoeff = 0.0f;   // ~1ms attack
+    float envReleaseCoeff = 0.0f;  // ~50ms release
 
     // Processing state
     double currentSampleRate = 44100.0;

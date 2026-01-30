@@ -198,18 +198,242 @@ void MusicalQuantizer::applyMagnitudeSmoothing(std::vector<float>& magnitude)
     magnitude = std::move(smoothed);
 }
 
+// Phase 2B: Log-spaced band center frequencies (Hz)
+// 48 bands from 20Hz to 20kHz at ~1/5 octave resolution
+// Geometrically spaced: f[i] = 20 * (20000/20)^(i/47) = 20 * 1000^(i/47)
+static constexpr float ENVELOPE_BAND_CENTERS[48] = {
+    20.0f, 23.1f, 26.7f, 30.8f, 35.6f, 41.1f, 47.5f, 54.9f, 63.4f, 73.2f, 84.6f, 97.7f,      // 0-11
+    112.9f, 130.4f, 150.6f, 173.9f, 200.9f, 232.0f, 268.0f, 309.5f, 357.5f, 412.9f, 476.8f, 550.7f,  // 12-23
+    636.0f, 734.6f, 848.4f, 979.8f, 1131.5f, 1306.8f, 1509.2f, 1743.1f, 2013.2f, 2325.0f, 2685.2f, 3101.2f,  // 24-35
+    3581.2f, 4135.6f, 4776.0f, 5515.7f, 6370.1f, 7356.8f, 8496.6f, 9812.3f, 11331.3f, 13085.9f, 15112.5f, 17453.4f  // 36-47
+};
+
+std::vector<float> MusicalQuantizer::captureSpectralEnvelope(
+    const std::vector<float>& magnitude,
+    double sampleRate,
+    int fftSize) const
+{
+    // Phase 2B.1: Capture spectral envelope at ~1/6 octave resolution
+    // Use RMS energy per band for stable envelope estimation
+
+    std::vector<float> envelope(NUM_ENVELOPE_BANDS, 0.0f);
+    int numBins = static_cast<int>(magnitude.size());
+    float binResolution = static_cast<float>(sampleRate) / static_cast<float>(fftSize);
+    float nyquist = static_cast<float>(sampleRate) / 2.0f;
+
+    for (int band = 0; band < NUM_ENVELOPE_BANDS; ++band)
+    {
+        float centerFreq = ENVELOPE_BAND_CENTERS[band];
+        if (centerFreq >= nyquist)
+            break;
+
+        // ~1/6 octave bandwidth: factor of 2^(1/6) ≈ 1.122
+        float lowFreq = centerFreq / 1.122f;
+        float highFreq = centerFreq * 1.122f;
+
+        // Clamp to nyquist
+        highFreq = std::min(highFreq, nyquist);
+
+        // Convert to bin indices
+        int lowBin = static_cast<int>(std::floor(lowFreq / binResolution));
+        int highBin = static_cast<int>(std::ceil(highFreq / binResolution));
+        lowBin = std::clamp(lowBin, 0, numBins - 1);
+        highBin = std::clamp(highBin, 0, numBins - 1);
+
+        // Calculate RMS energy in this band (more stable than peak)
+        float sumSquares = 0.0f;
+        int binCount = 0;
+        for (int k = lowBin; k <= highBin; ++k)
+        {
+            float mag = magnitude[static_cast<size_t>(k)];
+            sumSquares += mag * mag;
+            binCount++;
+        }
+
+        // RMS = sqrt(sum of squares / count)
+        if (binCount > 0)
+        {
+            envelope[static_cast<size_t>(band)] = std::sqrt(sumSquares / static_cast<float>(binCount));
+        }
+    }
+
+    return envelope;
+}
+
+void MusicalQuantizer::applySpectralEnvelope(
+    std::vector<float>& magnitude,
+    const std::vector<float>& originalEnvelope,
+    double sampleRate,
+    int fftSize,
+    float preserveStrength) const
+{
+    // Phase 2B+ Enhanced: More extreme correction at high settings
+    if (preserveStrength <= 0.0f)
+        return;
+
+    // Non-linear scaling: make top end more aggressive
+    // pow(x, 0.7) gives gentler curve with more effect at high settings
+    float effectiveStrength = std::pow(preserveStrength, 0.7f);
+
+    // Dynamic clamp based on preserve setting:
+    // At 50%: ±18dB (ratio 0.125 to 8)
+    // At 100%: ±48dB (ratio 0.004 to 256) - nearly unclamped
+    float clampDb = 18.0f + (effectiveStrength * 30.0f);  // 18 to 48 dB
+    float minRatio = std::pow(10.0f, -clampDb / 20.0f);
+    float maxRatio = std::pow(10.0f, clampDb / 20.0f);
+
+    int numBins = static_cast<int>(magnitude.size());
+    float binResolution = static_cast<float>(sampleRate) / static_cast<float>(fftSize);
+    float nyquist = static_cast<float>(sampleRate) / 2.0f;
+
+    // First capture the post-quantization envelope
+    std::vector<float> postEnvelope = captureSpectralEnvelope(magnitude, sampleRate, fftSize);
+
+    // For each bin, find its envelope band and apply correction
+    for (int k = 1; k < numBins; ++k)
+    {
+        float binFreq = static_cast<float>(k) * binResolution;
+        if (binFreq >= nyquist || binFreq < ENVELOPE_BAND_CENTERS[0])
+            continue;
+
+        // Find which band this bin belongs to using binary-search-like approach
+        // Since bands are logarithmically spaced, use log-frequency for lookup
+        float logFreq = std::log(binFreq);
+        int closestBand = 0;
+        float minDist = std::abs(logFreq - std::log(ENVELOPE_BAND_CENTERS[0]));
+
+        for (int band = 1; band < NUM_ENVELOPE_BANDS; ++band)
+        {
+            if (ENVELOPE_BAND_CENTERS[band] >= nyquist)
+                break;
+            float dist = std::abs(logFreq - std::log(ENVELOPE_BAND_CENTERS[band]));
+            if (dist < minDist)
+            {
+                minDist = dist;
+                closestBand = band;
+            }
+        }
+
+        // Calculate ratio: original / post-quantization
+        float originalVal = originalEnvelope[static_cast<size_t>(closestBand)];
+        float postVal = postEnvelope[static_cast<size_t>(closestBand)];
+
+        // Floor threshold to avoid division by near-zero
+        if (postVal < ENVELOPE_FLOOR)
+            postVal = ENVELOPE_FLOOR;
+        if (originalVal < ENVELOPE_FLOOR)
+            originalVal = ENVELOPE_FLOOR;
+
+        float ratio = originalVal / postVal;
+
+        // Apply dynamic clamp
+        ratio = std::clamp(ratio, minRatio, maxRatio);
+
+        // Apply ratio scaled by effectiveStrength (non-linear)
+        // At 0%: no correction (ratio of 1.0)
+        // At 100%: full correction with expanded dynamic range
+        float blendedRatio = 1.0f + effectiveStrength * (ratio - 1.0f);
+
+        magnitude[static_cast<size_t>(k)] *= blendedRatio;
+    }
+}
+
+float MusicalQuantizer::detectTransient(const std::vector<float>& magnitude)
+{
+    // Phase 2B.2: Detect if current frame is a transient
+    // Compare total spectral energy to previous frame
+
+    // Calculate current frame energy
+    float currentEnergy = 0.0f;
+    for (const float& mag : magnitude)
+    {
+        currentEnergy += mag * mag;
+    }
+
+    // Calculate energy ratio
+    float ratio = 1.0f;
+    if (previousFrameEnergy > ENVELOPE_FLOOR)
+    {
+        ratio = currentEnergy / previousFrameEnergy;
+    }
+
+    // Store for next frame
+    previousFrameEnergy = currentEnergy;
+
+    // Convert sensitivity (0-100%) to threshold ratio
+    // 0% = 3.0x ratio (less sensitive)
+    // 100% = 1.2x ratio (more sensitive)
+    // Default 50% = 1.5x ratio
+    float thresholdRatio = 3.0f - transientSensitivity * 1.8f;  // Linear interp from 3.0 to 1.2
+
+    // Check if this is a transient
+    bool isTransient = (ratio > thresholdRatio);
+
+    // Update ramp value
+    if (isTransient)
+    {
+        // Snap to 1.0 on transient detection
+        transientRampValue = 1.0f;
+    }
+    else
+    {
+        // Decay over TRANSIENT_RAMP_FRAMES
+        float decayRate = 1.0f / static_cast<float>(TRANSIENT_RAMP_FRAMES);
+        transientRampValue = std::max(0.0f, transientRampValue - decayRate);
+    }
+
+    // Return transient factor scaled by transientAmount
+    return transientRampValue * transientAmount;
+}
+
 std::pair<std::vector<float>, std::vector<float>> MusicalQuantizer::quantizeSpectrum(
     const std::vector<float>& magnitude,
     const std::vector<float>& phase,
     double sampleRate,
     int fftSize,
     float strength,
-    const std::vector<float>* driftCents)
+    const std::vector<float>* driftCents,
+    const std::vector<float>* preShiftEnvelope)
 {
     if (strength <= 0.0f)
         return { magnitude, phase };
 
     strength = std::clamp(strength, 0.0f, 1.0f);
+
+    // Phase 2B.1: Use pre-shift envelope if provided (from INPUT before any processing)
+    // Otherwise capture from current magnitude (less accurate but backward compatible)
+    std::vector<float> originalEnvelope;
+    if (preserveAmount > 0.0f)
+    {
+        if (preShiftEnvelope != nullptr && !preShiftEnvelope->empty())
+        {
+            // Use the pre-captured envelope from INPUT signal (before shift)
+            originalEnvelope = *preShiftEnvelope;
+        }
+        else
+        {
+            // Fallback: capture from current magnitude (post-shift, less accurate)
+            originalEnvelope = captureSpectralEnvelope(magnitude, sampleRate, fftSize);
+        }
+    }
+
+    // Phase 2B.2: Detect transient and reduce quantization strength if needed
+    float transientFactor = 0.0f;
+    if (transientAmount > 0.0f)
+    {
+        transientFactor = detectTransient(magnitude);
+    }
+
+    // Reduce quantization strength during transients
+    // transientFactor = 1.0 means full transient, reduce strength toward 0
+    float effectiveStrength = strength * (1.0f - transientFactor);
+
+    // If effective strength is very low, just return original
+    if (effectiveStrength <= 0.001f)
+    {
+        // Still need to update transient detection state for next frame
+        return { magnitude, phase };
+    }
 
     int numBins = static_cast<int>(magnitude.size());
     float binResolution = static_cast<float>(sampleRate) / static_cast<float>(fftSize);
@@ -257,9 +481,10 @@ std::pair<std::vector<float>, std::vector<float>> MusicalQuantizer::quantizeSpec
         float lowerFreq, upperFreq, lowerWeight, upperWeight;
         findTwoNearestScaleFrequencies(binFreq, lowerFreq, upperFreq, lowerWeight, upperWeight);
 
-        // Interpolate based on strength (blend between original and quantized)
-        float lowerTargetFreq = (1.0f - strength) * binFreq + strength * lowerFreq;
-        float upperTargetFreq = (1.0f - strength) * binFreq + strength * upperFreq;
+        // Interpolate based on effectiveStrength (blend between original and quantized)
+        // This respects transient detection which may reduce quantization during attacks
+        float lowerTargetFreq = (1.0f - effectiveStrength) * binFreq + effectiveStrength * lowerFreq;
+        float upperTargetFreq = (1.0f - effectiveStrength) * binFreq + effectiveStrength * upperFreq;
 
         // Apply drift if provided (to both targets)
         if (driftCents != nullptr && static_cast<size_t>(k) < driftCents->size())
@@ -366,6 +591,23 @@ std::pair<std::vector<float>, std::vector<float>> MusicalQuantizer::quantizeSpec
         }
     }
 
+    // Phase 2B+ Enhanced: Apply spectral envelope preservation
+    // Use high-resolution envelope (96 bands) when PRESERVE > 75% for tighter matching
+    if (preserveAmount > 0.0f && !originalEnvelope.empty())
+    {
+        if (preserveAmount > 0.75f)
+        {
+            // High resolution mode: recapture at higher resolution and apply
+            std::vector<float> hiResOriginal = captureSpectralEnvelopeHighRes(magnitude, sampleRate, fftSize);
+            applySpectralEnvelopeHighRes(quantizedMagnitude, hiResOriginal, sampleRate, fftSize, preserveAmount);
+        }
+        else
+        {
+            // Standard resolution mode
+            applySpectralEnvelope(quantizedMagnitude, originalEnvelope, sampleRate, fftSize, preserveAmount);
+        }
+    }
+
     // Phase 2A.3: Phase continuity with magnitude gating and decay
     // FIX: Blend between input phase (from phase vocoder) and phase accumulator based on strength
     // This ensures Enhanced Mode affects the non-quantized portion of the signal
@@ -424,10 +666,11 @@ std::pair<std::vector<float>, std::vector<float>> MusicalQuantizer::quantizeSpec
                         // Get the quantized phase (from persistent phase accumulator)
                         float quantizedPhaseValue = midiPhaseAccumulators[static_cast<size_t>(midiNote)];
 
-                        // FIX: Blend between input phase and quantized phase based on strength
+                        // FIX: Blend between input phase and quantized phase based on effectiveStrength
                         // At strength=0: 100% input phase (phase vocoder if enabled)
                         // At strength=1: 100% quantized phase (phase accumulator)
                         // This allows Enhanced Mode to affect the non-quantized portion
+                        // Also respects transient detection which reduces quantization during attacks
 
                         // Phase interpolation needs to handle wraparound
                         // Use circular interpolation to avoid jumps at +/- PI boundary
@@ -437,8 +680,8 @@ std::pair<std::vector<float>, std::vector<float>> MusicalQuantizer::quantizeSpec
                         while (phaseDiff > PI) phaseDiff -= TWO_PI;
                         while (phaseDiff < -PI) phaseDiff += TWO_PI;
 
-                        // Interpolate: inputPhase + strength * (difference)
-                        outputPhase = inputPhase + strength * phaseDiff;
+                        // Interpolate: inputPhase + effectiveStrength * (difference)
+                        outputPhase = inputPhase + effectiveStrength * phaseDiff;
 
                         // Wrap result to [-PI, PI]
                         while (outputPhase > PI) outputPhase -= TWO_PI;
@@ -506,6 +749,146 @@ std::vector<float> MusicalQuantizer::getScaleFrequencies(float minFreq, float ma
     }
 
     return frequencies;
+}
+
+// Phase 2B+ High-resolution (96 bands) envelope band centers
+// For PRESERVE > 75%, using ~1/10 octave resolution for tighter spectral matching
+// Geometrically spaced: f[i] = 20 * (20000/20)^(i/95) = 20 * 1000^(i/95)
+static constexpr float ENVELOPE_BAND_CENTERS_HIGH_RES[96] = {
+    // Bands 0-23: 20-120 Hz
+    20.0f, 21.5f, 23.1f, 24.8f, 26.7f, 28.7f, 30.8f, 33.1f, 35.6f, 38.3f, 41.1f, 44.2f,
+    47.5f, 51.1f, 54.9f, 59.0f, 63.4f, 68.1f, 73.2f, 78.7f, 84.6f, 90.9f, 97.7f, 105.0f,
+    // Bands 24-47: 113-640 Hz
+    112.9f, 121.3f, 130.4f, 140.1f, 150.6f, 161.9f, 173.9f, 186.9f, 200.9f, 215.9f, 232.0f, 249.4f,
+    268.0f, 288.1f, 309.5f, 332.7f, 357.5f, 384.3f, 412.9f, 443.7f, 476.8f, 512.5f, 550.7f, 591.9f,
+    // Bands 48-71: 636-3600 Hz
+    636.0f, 683.5f, 734.6f, 789.5f, 848.4f, 911.7f, 979.8f, 1053.0f, 1131.5f, 1216.2f, 1306.8f, 1404.3f,
+    1509.2f, 1621.9f, 1743.1f, 1873.3f, 2013.2f, 2163.6f, 2325.0f, 2498.5f, 2685.2f, 2886.0f, 3101.2f, 3332.2f,
+    // Bands 72-95: 3580-20000 Hz
+    3580.0f, 3847.3f, 4135.4f, 4445.0f, 4777.8f, 5135.3f, 5519.6f, 5932.4f, 6376.1f, 6853.0f, 7365.7f, 7917.0f,
+    8509.7f, 9147.0f, 9832.0f, 10568.0f, 11358.9f, 12208.5f, 13121.0f, 14101.0f, 15153.0f, 16282.4f, 17494.8f, 18796.0f
+};
+
+std::vector<float> MusicalQuantizer::captureSpectralEnvelopeHighRes(
+    const std::vector<float>& magnitude,
+    double sampleRate,
+    int fftSize) const
+{
+    // High-resolution envelope capture (~1/10 octave resolution)
+    // Uses 96 bands for tighter spectral matching when PRESERVE > 75%
+
+    std::vector<float> envelope(NUM_ENVELOPE_BANDS_HIGH_RES, 0.0f);
+    int numBins = static_cast<int>(magnitude.size());
+    float binResolution = static_cast<float>(sampleRate) / static_cast<float>(fftSize);
+    float nyquist = static_cast<float>(sampleRate) / 2.0f;
+
+    for (int band = 0; band < NUM_ENVELOPE_BANDS_HIGH_RES; ++band)
+    {
+        float centerFreq = ENVELOPE_BAND_CENTERS_HIGH_RES[band];
+        if (centerFreq >= nyquist)
+            break;
+
+        // ~1/10 octave bandwidth: factor of 2^(1/10) ≈ 1.072
+        float lowFreq = centerFreq / 1.072f;
+        float highFreq = centerFreq * 1.072f;
+
+        // Clamp to nyquist
+        highFreq = std::min(highFreq, nyquist);
+
+        // Convert to bin indices
+        int lowBin = static_cast<int>(std::floor(lowFreq / binResolution));
+        int highBin = static_cast<int>(std::ceil(highFreq / binResolution));
+        lowBin = std::clamp(lowBin, 0, numBins - 1);
+        highBin = std::clamp(highBin, 0, numBins - 1);
+
+        // Calculate RMS energy in this band
+        float sumSquares = 0.0f;
+        int binCount = 0;
+        for (int k = lowBin; k <= highBin; ++k)
+        {
+            float mag = magnitude[static_cast<size_t>(k)];
+            sumSquares += mag * mag;
+            binCount++;
+        }
+
+        if (binCount > 0)
+        {
+            envelope[static_cast<size_t>(band)] = std::sqrt(sumSquares / static_cast<float>(binCount));
+        }
+    }
+
+    return envelope;
+}
+
+void MusicalQuantizer::applySpectralEnvelopeHighRes(
+    std::vector<float>& magnitude,
+    const std::vector<float>& originalEnvelope,
+    double sampleRate,
+    int fftSize,
+    float preserveStrength) const
+{
+    // High-resolution envelope application for PRESERVE > 75%
+    // Uses 96 bands for tighter spectral matching
+
+    if (preserveStrength <= 0.0f)
+        return;
+
+    // Non-linear scaling: make top end more aggressive
+    float effectiveStrength = std::pow(preserveStrength, 0.7f);
+
+    // At high preserve (> 75%), use very wide clamp range (nearly unclamped)
+    // Map 75%-100% to ±36dB to ±60dB
+    float clampDb = 36.0f + ((preserveStrength - 0.75f) / 0.25f) * 24.0f;  // 36 to 60 dB
+    float minRatio = std::pow(10.0f, -clampDb / 20.0f);
+    float maxRatio = std::pow(10.0f, clampDb / 20.0f);
+
+    int numBins = static_cast<int>(magnitude.size());
+    float binResolution = static_cast<float>(sampleRate) / static_cast<float>(fftSize);
+    float nyquist = static_cast<float>(sampleRate) / 2.0f;
+
+    // Capture post-quantization envelope at high resolution
+    std::vector<float> postEnvelope = captureSpectralEnvelopeHighRes(magnitude, sampleRate, fftSize);
+
+    // Apply correction per bin
+    for (int k = 1; k < numBins; ++k)
+    {
+        float binFreq = static_cast<float>(k) * binResolution;
+        if (binFreq >= nyquist || binFreq < ENVELOPE_BAND_CENTERS_HIGH_RES[0])
+            continue;
+
+        // Find closest band using log-frequency lookup
+        float logFreq = std::log(binFreq);
+        int closestBand = 0;
+        float minDist = std::abs(logFreq - std::log(ENVELOPE_BAND_CENTERS_HIGH_RES[0]));
+
+        for (int band = 1; band < NUM_ENVELOPE_BANDS_HIGH_RES; ++band)
+        {
+            if (ENVELOPE_BAND_CENTERS_HIGH_RES[band] >= nyquist)
+                break;
+            float dist = std::abs(logFreq - std::log(ENVELOPE_BAND_CENTERS_HIGH_RES[band]));
+            if (dist < minDist)
+            {
+                minDist = dist;
+                closestBand = band;
+            }
+        }
+
+        // Calculate correction ratio
+        float originalVal = originalEnvelope[static_cast<size_t>(closestBand)];
+        float postVal = postEnvelope[static_cast<size_t>(closestBand)];
+
+        if (postVal < ENVELOPE_FLOOR)
+            postVal = ENVELOPE_FLOOR;
+        if (originalVal < ENVELOPE_FLOOR)
+            originalVal = ENVELOPE_FLOOR;
+
+        float ratio = originalVal / postVal;
+        ratio = std::clamp(ratio, minRatio, maxRatio);
+
+        // Apply with non-linear effective strength
+        float blendedRatio = 1.0f + effectiveStrength * (ratio - 1.0f);
+        magnitude[static_cast<size_t>(k)] *= blendedRatio;
+    }
 }
 
 } // namespace fshift

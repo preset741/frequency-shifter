@@ -19,6 +19,10 @@ namespace fshift
  * - Total energy normalization: maintains constant energy before/after quantization
  * - Phase continuity: persistent phase accumulators for smooth synthesis
  *
+ * Phase 2B improvements:
+ * - Spectral envelope preservation: maintains timbral character after quantization
+ * - Transient detection bypass: reduces quantization during attacks for punch
+ *
  * Based on the Python implementation in harmonic_shifter/core/quantizer.py
  */
 class MusicalQuantizer
@@ -83,12 +87,17 @@ public:
      * - Total energy normalization (maintains input energy)
      * - Phase continuity (uses persistent phase accumulators)
      *
+     * Phase 2B improvements:
+     * - Spectral envelope preservation (pass preShiftEnvelope for accurate timbre)
+     * - Transient detection bypass
+     *
      * @param magnitude Magnitude spectrum
      * @param phase Phase spectrum (used only for bypassed bins when strength < 1)
      * @param sampleRate Sample rate in Hz
      * @param fftSize FFT size
      * @param strength Quantization strength (0-1)
      * @param driftCents Optional array of drift values per bin (in cents)
+     * @param preShiftEnvelope Optional pre-captured envelope from INPUT before any processing
      * @return Pair of (quantized_magnitude, quantized_phase)
      */
     std::pair<std::vector<float>, std::vector<float>> quantizeSpectrum(
@@ -97,7 +106,21 @@ public:
         double sampleRate,
         int fftSize,
         float strength = 1.0f,
-        const std::vector<float>* driftCents = nullptr);
+        const std::vector<float>* driftCents = nullptr,
+        const std::vector<float>* preShiftEnvelope = nullptr);
+
+    /**
+     * Capture spectral envelope from magnitude spectrum.
+     * Call this on the INPUT signal BEFORE shift/quantization.
+     * Pass the result to quantizeSpectrum's preShiftEnvelope parameter.
+     */
+    std::vector<float> getSpectralEnvelope(
+        const std::vector<float>& magnitude,
+        double sampleRate,
+        int fftSize) const
+    {
+        return captureSpectralEnvelope(magnitude, sampleRate, fftSize);
+    }
 
     /**
      * Get all scale frequencies in a given range.
@@ -107,6 +130,11 @@ public:
      * @return Vector of frequencies in scale within range
      */
     std::vector<float> getScaleFrequencies(float minFreq = 20.0f, float maxFreq = 20000.0f) const;
+
+    // Phase 2B: Envelope preservation and transient detection setters
+    void setPreserveAmount(float amount) { preserveAmount = std::clamp(amount, 0.0f, 1.0f); }
+    void setTransientAmount(float amount) { transientAmount = std::clamp(amount, 0.0f, 1.0f); }
+    void setTransientSensitivity(float sensitivity) { transientSensitivity = std::clamp(sensitivity, 0.0f, 1.0f); }
 
     // Getters
     int getRootMidi() const { return rootMidi; }
@@ -149,6 +177,46 @@ private:
      */
     static void applyMagnitudeSmoothing(std::vector<float>& magnitude);
 
+    /**
+     * Phase 2B.1: Capture spectral envelope at ~1/3 octave resolution.
+     * Uses peak magnitude per band (not average) for better transient response.
+     *
+     * @param magnitude Magnitude spectrum
+     * @param sampleRate Sample rate in Hz
+     * @param fftSize FFT size
+     * @return Envelope values per frequency band
+     */
+    std::vector<float> captureSpectralEnvelope(
+        const std::vector<float>& magnitude,
+        double sampleRate,
+        int fftSize) const;
+
+    /**
+     * Phase 2B.1: Apply spectral envelope to magnitude spectrum.
+     * Reimpose the original envelope shape on the quantized spectrum.
+     *
+     * @param magnitude Magnitude spectrum (modified in place)
+     * @param originalEnvelope Envelope captured before quantization
+     * @param sampleRate Sample rate in Hz
+     * @param fftSize FFT size
+     * @param preserveStrength How much to apply (0-1)
+     */
+    void applySpectralEnvelope(
+        std::vector<float>& magnitude,
+        const std::vector<float>& originalEnvelope,
+        double sampleRate,
+        int fftSize,
+        float preserveStrength) const;
+
+    /**
+     * Phase 2B.2: Detect if current frame is a transient.
+     * Compares total spectral energy to previous frame.
+     *
+     * @param magnitude Current magnitude spectrum
+     * @return Transient reduction factor (0 = no transient, 1 = strong transient)
+     */
+    float detectTransient(const std::vector<float>& magnitude);
+
     int rootMidi;
     ScaleType scaleType;
     std::vector<int> scaleDegrees;
@@ -173,6 +241,44 @@ private:
 
     // Flag to track if prepare() has been called
     bool prepared = false;
+
+    // Phase 2B: Envelope preservation parameters
+    float preserveAmount = 0.0f;  // 0.0 - 1.0
+
+    // Phase 2B: Transient detection parameters
+    float transientAmount = 0.0f;       // 0.0 - 1.0 (how much transients bypass quantization)
+    float transientSensitivity = 0.5f;  // 0.0 - 1.0 (detection threshold)
+
+    // Transient detection state
+    float previousFrameEnergy = 0.0f;
+    float transientRampValue = 0.0f;    // Current ramp-down value (1 = in transient, decays to 0)
+    static constexpr int TRANSIENT_RAMP_FRAMES = 4;  // Frames to ramp quantization back up
+    static constexpr float ENVELOPE_FLOOR = 1e-6f;   // Floor to avoid division by near-zero
+
+    // Spectral envelope band parameters
+    // Standard resolution: 48 bands at ~1/5 octave resolution
+    // High resolution: 96 bands at ~1/10 octave resolution (used at PRESERVE > 75%)
+    static constexpr int NUM_ENVELOPE_BANDS = 48;
+    static constexpr int NUM_ENVELOPE_BANDS_HIGH_RES = 96;
+
+    /**
+     * Phase 2B+ High-resolution envelope capture for PRESERVE > 75%.
+     * Uses 96 bands (~1/10 octave) for tighter spectral matching.
+     */
+    std::vector<float> captureSpectralEnvelopeHighRes(
+        const std::vector<float>& magnitude,
+        double sampleRate,
+        int fftSize) const;
+
+    /**
+     * Phase 2B+ Apply high-resolution spectral envelope.
+     */
+    void applySpectralEnvelopeHighRes(
+        std::vector<float>& magnitude,
+        const std::vector<float>& originalEnvelope,
+        double sampleRate,
+        int fftSize,
+        float preserveStrength) const;
 };
 
 } // namespace fshift

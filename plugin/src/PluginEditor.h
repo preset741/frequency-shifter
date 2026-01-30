@@ -114,6 +114,19 @@ private:
     juce::Label quantizeLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> quantizeAttachment;
 
+    // Phase 2B: Envelope preservation and transient controls
+    juce::Slider preserveSlider;
+    juce::Label preserveLabel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> preserveAttachment;
+
+    juce::Slider transientsSlider;
+    juce::Label transientsLabel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> transientsAttachment;
+
+    juce::Slider sensitivitySlider;
+    juce::Label sensitivityLabel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> sensitivityAttachment;
+
     // Root note selector
     juce::ComboBox rootNoteCombo;
     juce::Label rootNoteLabel;
