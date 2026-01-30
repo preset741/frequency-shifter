@@ -133,10 +133,10 @@ private:
     juce::ToggleButton phaseVocoderButton;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> phaseVocoderAttachment;
 
-    // Quality mode selector
-    juce::ComboBox qualityModeCombo;
-    juce::Label qualityModeLabel;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> qualityModeAttachment;
+    // SMEAR control (replaces quality mode dropdown)
+    juce::Slider smearSlider;
+    juce::Label smearLabel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> smearAttachment;
 
     // Drift controls (for organic/imperfect quantization)
     juce::Slider driftAmountSlider;

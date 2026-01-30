@@ -15,7 +15,7 @@ FrequencyShifterProcessor::FrequencyShifterProcessor()
     parameters.addParameterListener(PARAM_SCALE_TYPE, this);
     parameters.addParameterListener(PARAM_DRY_WET, this);
     parameters.addParameterListener(PARAM_PHASE_VOCODER, this);
-    parameters.addParameterListener(PARAM_QUALITY_MODE, this);
+    parameters.addParameterListener(PARAM_SMEAR, this);
     parameters.addParameterListener(PARAM_DRIFT_AMOUNT, this);
     parameters.addParameterListener(PARAM_DRIFT_RATE, this);
     parameters.addParameterListener(PARAM_DRIFT_MODE, this);
@@ -47,7 +47,7 @@ FrequencyShifterProcessor::~FrequencyShifterProcessor()
     parameters.removeParameterListener(PARAM_SCALE_TYPE, this);
     parameters.removeParameterListener(PARAM_DRY_WET, this);
     parameters.removeParameterListener(PARAM_PHASE_VOCODER, this);
-    parameters.removeParameterListener(PARAM_QUALITY_MODE, this);
+    parameters.removeParameterListener(PARAM_SMEAR, this);
     parameters.removeParameterListener(PARAM_DRIFT_AMOUNT, this);
     parameters.removeParameterListener(PARAM_DRIFT_RATE, this);
     parameters.removeParameterListener(PARAM_DRIFT_MODE, this);
@@ -135,12 +135,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout FrequencyShifterProcessor::c
         "Enhanced Mode",
         true));
 
-    // Quality mode (latency/quality tradeoff)
-    params.push_back(std::make_unique<juce::AudioParameterChoice>(
-        juce::ParameterID{ PARAM_QUALITY_MODE, 1 },
-        "Quality",
-        juce::StringArray{ "Low Latency", "Balanced", "Quality" },
-        2));  // Default to Quality mode
+    // SMEAR control (5-123ms) - replaces quality mode dropdown
+    // Crossfades between FFT sizes for continuous latency/quality control
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID{ PARAM_SMEAR, 1 },
+        "Smear",
+        juce::NormalisableRange<float>(MIN_SMEAR_MS, MAX_SMEAR_MS, 0.1f),
+        93.0f,  // Default to max quality (~93ms)
+        juce::AudioParameterFloatAttributes().withLabel("ms")));
 
     // Log scale toggle for frequency shift control
     params.push_back(std::make_unique<juce::AudioParameterBool>(
@@ -358,12 +360,12 @@ void FrequencyShifterProcessor::parameterChanged(const juce::String& parameterID
     {
         usePhaseVocoder.store(newValue > 0.5f);
     }
-    else if (parameterID == PARAM_QUALITY_MODE)
+    else if (parameterID == PARAM_SMEAR)
     {
-        int mode = static_cast<int>(newValue);
-        if (mode != qualityMode.load())
+        float oldSmear = smearMs.load();
+        if (std::abs(newValue - oldSmear) > 0.1f)
         {
-            qualityMode.store(mode);
+            smearMs.store(newValue);
             needsReinit.store(true);
         }
     }
@@ -440,38 +442,44 @@ void FrequencyShifterProcessor::parameterChanged(const juce::String& parameterID
     else if (parameterID == PARAM_DELAY_TIME)
     {
         delayTime.store(newValue);
-        for (auto& delay : spectralDelays)
-            delay.setDelayTime(newValue);
+        for (auto& chDelays : spectralDelays)
+            for (auto& delay : chDelays)
+                delay.setDelayTime(newValue);
     }
     else if (parameterID == PARAM_DELAY_SLOPE)
     {
         delaySlope.store(newValue);
-        for (auto& delay : spectralDelays)
-            delay.setFrequencySlope(newValue);
+        for (auto& chDelays : spectralDelays)
+            for (auto& delay : chDelays)
+                delay.setFrequencySlope(newValue);
     }
     else if (parameterID == PARAM_DELAY_FEEDBACK)
     {
         delayFeedback.store(newValue);
-        for (auto& delay : spectralDelays)
-            delay.setFeedback(newValue / 100.0f);
+        for (auto& chDelays : spectralDelays)
+            for (auto& delay : chDelays)
+                delay.setFeedback(newValue / 100.0f);
     }
     else if (parameterID == PARAM_DELAY_DAMPING)
     {
         delayDamping.store(newValue);
-        for (auto& delay : spectralDelays)
-            delay.setDamping(newValue);
+        for (auto& chDelays : spectralDelays)
+            for (auto& delay : chDelays)
+                delay.setDamping(newValue);
     }
     else if (parameterID == PARAM_DELAY_MIX)
     {
         delayMix.store(newValue);
-        for (auto& delay : spectralDelays)
-            delay.setMix(newValue);
+        for (auto& chDelays : spectralDelays)
+            for (auto& delay : chDelays)
+                delay.setMix(newValue);
     }
     else if (parameterID == PARAM_DELAY_GAIN)
     {
         delayGain.store(newValue);
-        for (auto& delay : spectralDelays)
-            delay.setGain(newValue);
+        for (auto& chDelays : spectralDelays)
+            for (auto& delay : chDelays)
+                delay.setGain(newValue);
     }
 }
 
@@ -484,68 +492,136 @@ void FrequencyShifterProcessor::prepareToPlay(double sampleRate, int samplesPerB
     reinitializeDsp();
 }
 
+int FrequencyShifterProcessor::fftSizeFromMs(float ms) const
+{
+    // Convert ms to samples, then find nearest FFT size
+    int targetSamples = static_cast<int>(ms * currentSampleRate / 1000.0);
+
+    // Find the closest FFT size
+    int closest = FFT_SIZES[0];
+    int minDiff = std::abs(targetSamples - closest);
+
+    for (int i = 1; i < NUM_FFT_SIZES; ++i)
+    {
+        int diff = std::abs(targetSamples - FFT_SIZES[i]);
+        if (diff < minDiff)
+        {
+            minDiff = diff;
+            closest = FFT_SIZES[i];
+        }
+    }
+    return closest;
+}
+
+void FrequencyShifterProcessor::getBlendParameters(float smearMsValue, int& fftSize1, int& fftSize2, float& crossfade) const
+{
+    // Convert ms to samples
+    float targetSamples = smearMsValue * static_cast<float>(currentSampleRate) / 1000.0f;
+
+    // Find which two FFT sizes we're between
+    fftSize1 = FFT_SIZES[0];
+    fftSize2 = FFT_SIZES[0];
+    crossfade = 0.0f;
+
+    for (int i = 0; i < NUM_FFT_SIZES - 1; ++i)
+    {
+        float lowSize = static_cast<float>(FFT_SIZES[i]);
+        float highSize = static_cast<float>(FFT_SIZES[i + 1]);
+
+        if (targetSamples >= lowSize && targetSamples <= highSize)
+        {
+            fftSize1 = FFT_SIZES[i];
+            fftSize2 = FFT_SIZES[i + 1];
+            // Linear interpolation between sizes
+            crossfade = (targetSamples - lowSize) / (highSize - lowSize);
+            return;
+        }
+    }
+
+    // If we're at or above the max, use the largest size
+    if (targetSamples >= FFT_SIZES[NUM_FFT_SIZES - 1])
+    {
+        fftSize1 = FFT_SIZES[NUM_FFT_SIZES - 1];
+        fftSize2 = FFT_SIZES[NUM_FFT_SIZES - 1];
+        crossfade = 0.0f;
+    }
+}
+
 void FrequencyShifterProcessor::reinitializeDsp()
 {
-    // Determine FFT/hop sizes based on quality mode
-    const auto mode = static_cast<QualityMode>(qualityMode.load());
-    switch (mode)
-    {
-        case QualityMode::LowLatency:
-            currentFftSize = 1024;
-            currentHopSize = 256;
-            break;
-        case QualityMode::Balanced:
-            currentFftSize = 2048;
-            currentHopSize = 512;
-            break;
-        case QualityMode::Quality:
-        default:
-            currentFftSize = 4096;
-            currentHopSize = 1024;
-            break;
-    }
+    // Get the two FFT sizes we need based on SMEAR setting
+    float smear = smearMs.load();
+    int fftSize1, fftSize2;
+    float crossfade;
+    getBlendParameters(smear, fftSize1, fftSize2, crossfade);
+
+    currentFftSizes[0] = fftSize1;
+    currentFftSizes[1] = fftSize2;
+    currentHopSizes[0] = fftSize1 / 4;  // Standard 75% overlap
+    currentHopSizes[1] = fftSize2 / 4;
+    currentCrossfade = crossfade;
+
+    // If crossfade is very close to 0 or 1, use single processor mode
+    useSingleProcessor = (crossfade < 0.01f || crossfade > 0.99f || fftSize1 == fftSize2);
 
     const int numChannels = getTotalNumInputChannels();
 
-    // Initialize DSP components for each channel
+    // Initialize DSP components for each channel and each processor
     for (int ch = 0; ch < std::min(numChannels, MAX_CHANNELS); ++ch)
     {
-        stftProcessors[ch] = std::make_unique<fshift::STFT>(currentFftSize, currentHopSize);
-        stftProcessors[ch]->prepare(currentSampleRate);
+        for (int proc = 0; proc < NUM_PROCESSORS; ++proc)
+        {
+            int fftSize = currentFftSizes[proc];
+            int hopSize = currentHopSizes[proc];
 
-        phaseVocoders[ch] = std::make_unique<fshift::PhaseVocoder>(currentFftSize, currentHopSize, currentSampleRate);
+            stftProcessors[ch][proc] = std::make_unique<fshift::STFT>(fftSize, hopSize);
+            stftProcessors[ch][proc]->prepare(currentSampleRate);
 
-        frequencyShifters[ch] = std::make_unique<fshift::FrequencyShifter>(currentSampleRate, currentFftSize);
+            phaseVocoders[ch][proc] = std::make_unique<fshift::PhaseVocoder>(fftSize, hopSize, currentSampleRate);
 
-        // Initialize overlap-add buffers
-        inputBuffers[ch].resize(static_cast<size_t>(currentFftSize) * 2, 0.0f);
-        outputBuffers[ch].resize(static_cast<size_t>(currentFftSize) * 2, 0.0f);
-        inputWritePos[ch] = 0;
-        outputReadPos[ch] = 0;
+            frequencyShifters[ch][proc] = std::make_unique<fshift::FrequencyShifter>(currentSampleRate, fftSize);
+
+            // Initialize overlap-add buffers
+            inputBuffers[ch][proc].resize(static_cast<size_t>(fftSize) * 2, 0.0f);
+            outputBuffers[ch][proc].resize(static_cast<size_t>(fftSize) * 2, 0.0f);
+            inputWritePos[ch][proc] = 0;
+            outputReadPos[ch][proc] = 0;
+        }
+
+        // Initialize delay compensation buffer
+        // Fixed latency is MAX_FFT_SIZE samples, we add delay when using smaller FFT
+        delayCompBuffers[ch].resize(static_cast<size_t>(MAX_FFT_SIZE) * 2, 0.0f);
+        delayCompWritePos[ch] = 0;
+        delayCompReadPos[ch] = 0;
     }
 
-    // Prepare drift modulator
-    driftModulator.prepare(currentSampleRate, currentFftSize / 2);
+    // Prepare drift modulator with max FFT size for consistency
+    driftModulator.prepare(currentSampleRate, MAX_FFT_SIZE / 2);
     driftModulator.reset();
 
-    // Pre-compute spectral mask curve
-    spectralMask.computeMaskCurve(currentSampleRate, currentFftSize);
+    // Pre-compute spectral mask curve with max FFT size
+    spectralMask.computeMaskCurve(currentSampleRate, MAX_FFT_SIZE);
     maskNeedsUpdate.store(false);
 
-    // Prepare spectral delays
+    // Prepare spectral delays for both processors
     for (int ch = 0; ch < MAX_CHANNELS; ++ch)
     {
-        spectralDelays[static_cast<size_t>(ch)].prepare(currentSampleRate, currentFftSize, currentHopSize);
-        spectralDelays[static_cast<size_t>(ch)].setDelayTime(delayTime.load());
-        spectralDelays[static_cast<size_t>(ch)].setFrequencySlope(delaySlope.load());
-        spectralDelays[static_cast<size_t>(ch)].setFeedback(delayFeedback.load() / 100.0f);
-        spectralDelays[static_cast<size_t>(ch)].setDamping(delayDamping.load());
-        spectralDelays[static_cast<size_t>(ch)].setMix(delayMix.load());
-        spectralDelays[static_cast<size_t>(ch)].setGain(delayGain.load());
+        for (int proc = 0; proc < NUM_PROCESSORS; ++proc)
+        {
+            int fftSize = currentFftSizes[proc];
+            int hopSize = currentHopSizes[proc];
+            spectralDelays[ch][proc].prepare(currentSampleRate, fftSize, hopSize);
+            spectralDelays[ch][proc].setDelayTime(delayTime.load());
+            spectralDelays[ch][proc].setFrequencySlope(delaySlope.load());
+            spectralDelays[ch][proc].setFeedback(delayFeedback.load() / 100.0f);
+            spectralDelays[ch][proc].setDamping(delayDamping.load());
+            spectralDelays[ch][proc].setMix(delayMix.load());
+            spectralDelays[ch][proc].setGain(delayGain.load());
+        }
     }
 
-    // Update latency reporting
-    setLatencySamples(getLatencySamples());
+    // Always report fixed latency of MAX_FFT_SIZE samples to host
+    setLatencySamples(MAX_FFT_SIZE);
     needsReinit.store(false);
 }
 
@@ -553,11 +629,15 @@ void FrequencyShifterProcessor::releaseResources()
 {
     for (int ch = 0; ch < MAX_CHANNELS; ++ch)
     {
-        stftProcessors[ch].reset();
-        phaseVocoders[ch].reset();
-        frequencyShifters[ch].reset();
-        inputBuffers[ch].clear();
-        outputBuffers[ch].clear();
+        for (int proc = 0; proc < NUM_PROCESSORS; ++proc)
+        {
+            stftProcessors[ch][proc].reset();
+            phaseVocoders[ch][proc].reset();
+            frequencyShifters[ch][proc].reset();
+            inputBuffers[ch][proc].clear();
+            outputBuffers[ch][proc].clear();
+        }
+        delayCompBuffers[ch].clear();
     }
 }
 
@@ -579,16 +659,16 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
 {
     juce::ScopedNoDenormals noDenormals;
 
-    // Check if we need to reinitialize DSP (quality mode changed)
+    // Check if we need to reinitialize DSP (SMEAR changed)
     if (needsReinit.load())
     {
         reinitializeDsp();
     }
 
-    // Update mask curve if parameters changed
+    // Update mask curve if parameters changed (use primary FFT size)
     if (maskNeedsUpdate.load())
     {
-        spectralMask.computeMaskCurve(currentSampleRate, currentFftSize);
+        spectralMask.computeMaskCurve(currentSampleRate, currentFftSizes[0]);
         maskNeedsUpdate.store(false);
     }
 
@@ -604,151 +684,208 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
     const bool currentMaskEnabled = maskEnabled.load();
     const bool currentDelayEnabled = delayEnabled.load();
 
-    // Cache current FFT settings for this block
-    const int fftSize = currentFftSize;
-    const int hopSize = currentHopSize;
+    // Cache crossfade value
+    const float crossfade = currentCrossfade;
+    const bool singleProc = useSingleProcessor;
 
-    // If no processing needed, just pass through
-    if (std::abs(currentShiftHz) < 0.01f && currentQuantizeStrength < 0.01f)
-    {
-        return;
-    }
+    // If no processing needed, still apply delay compensation for timing
+    const bool bypassProcessing = (std::abs(currentShiftHz) < 0.01f && currentQuantizeStrength < 0.01f);
 
     // Process each channel
     for (int channel = 0; channel < std::min(numChannels, MAX_CHANNELS); ++channel)
     {
-        if (!stftProcessors[channel])
-            continue;
-
         auto* channelData = buffer.getWritePointer(channel);
 
         // Store dry signal for mixing
         std::vector<float> drySignal(channelData, channelData + numSamples);
 
-        // Process through STFT pipeline
-        for (int i = 0; i < numSamples; ++i)
+        // Temp buffers for dual processor output
+        std::vector<float> proc0Output(static_cast<size_t>(numSamples), 0.0f);
+        std::vector<float> proc1Output(static_cast<size_t>(numSamples), 0.0f);
+
+        // Process through both STFT pipelines (or just one if singleProc)
+        const int numProcs = singleProc ? 1 : 2;
+
+        for (int proc = 0; proc < numProcs; ++proc)
         {
-            // Write input sample to circular buffer
-            inputBuffers[channel][static_cast<size_t>(inputWritePos[channel])] = channelData[i];
-            inputWritePos[channel] = (inputWritePos[channel] + 1) % static_cast<int>(inputBuffers[channel].size());
+            if (!stftProcessors[channel][proc])
+                continue;
 
-            // Check if we have enough samples for an FFT frame
-            if (inputWritePos[channel] % hopSize == 0)
+            const int fftSize = currentFftSizes[proc];
+            const int hopSize = currentHopSizes[proc];
+            auto& inputBuf = inputBuffers[channel][proc];
+            auto& outputBuf = outputBuffers[channel][proc];
+            auto& inWritePos = inputWritePos[channel][proc];
+            auto& outReadPos = outputReadPos[channel][proc];
+            auto& procOutput = (proc == 0) ? proc0Output : proc1Output;
+
+            // Process through STFT pipeline
+            for (int i = 0; i < numSamples; ++i)
             {
-                // Get input frame
-                std::vector<float> inputFrame(static_cast<size_t>(fftSize));
-                int readPos = (inputWritePos[channel] - fftSize + static_cast<int>(inputBuffers[channel].size()))
-                              % static_cast<int>(inputBuffers[channel].size());
-                for (int j = 0; j < fftSize; ++j)
+                // Write input sample to circular buffer
+                inputBuf[static_cast<size_t>(inWritePos)] = drySignal[static_cast<size_t>(i)];
+                inWritePos = (inWritePos + 1) % static_cast<int>(inputBuf.size());
+
+                // Check if we have enough samples for an FFT frame
+                if (inWritePos % hopSize == 0)
                 {
-                    inputFrame[static_cast<size_t>(j)] = inputBuffers[channel][static_cast<size_t>((readPos + j) % static_cast<int>(inputBuffers[channel].size()))];
-                }
-
-                // Perform STFT
-                auto [magnitude, phase] = stftProcessors[channel]->forward(inputFrame);
-
-                // Save dry spectrum for mask blending
-                std::vector<float> dryMagnitude;
-                std::vector<float> dryPhase;
-                if (currentMaskEnabled)
-                {
-                    dryMagnitude = magnitude;
-                    dryPhase = phase;
-                }
-
-                // Apply phase vocoder if enabled
-                if (currentUsePhaseVocoder && std::abs(currentShiftHz) > 0.01f)
-                {
-                    phase = phaseVocoders[channel]->process(magnitude, phase, currentShiftHz);
-                }
-
-                // Apply frequency shifting
-                if (std::abs(currentShiftHz) > 0.01f)
-                {
-                    std::tie(magnitude, phase) = frequencyShifters[channel]->shift(magnitude, phase, currentShiftHz);
-                }
-
-                // Apply musical quantization with optional drift
-                if (currentQuantizeStrength > 0.01f && quantizer)
-                {
-                    // Generate drift values if drift is enabled
-                    std::vector<float> driftCentsVec;
-                    const std::vector<float>* driftPtr = nullptr;
-
-                    if (currentDriftAmount > 0.01f)
+                    // Get input frame
+                    std::vector<float> inputFrame(static_cast<size_t>(fftSize));
+                    int readPos = (inWritePos - fftSize + static_cast<int>(inputBuf.size()))
+                                  % static_cast<int>(inputBuf.size());
+                    for (int j = 0; j < fftSize; ++j)
                     {
-                        const int numBins = fftSize / 2;
-                        driftCentsVec.resize(static_cast<size_t>(numBins));
+                        inputFrame[static_cast<size_t>(j)] = inputBuf[static_cast<size_t>((readPos + j) % static_cast<int>(inputBuf.size()))];
+                    }
+
+                    // Perform STFT
+                    auto [magnitude, phase] = stftProcessors[channel][proc]->forward(inputFrame);
+
+                    if (!bypassProcessing)
+                    {
+                        // Save dry spectrum for mask blending
+                        std::vector<float> dryMagnitude;
+                        std::vector<float> dryPhase;
+                        if (currentMaskEnabled)
+                        {
+                            dryMagnitude = magnitude;
+                            dryPhase = phase;
+                        }
+
+                        // Apply phase vocoder if enabled
+                        if (currentUsePhaseVocoder && std::abs(currentShiftHz) > 0.01f)
+                        {
+                            phase = phaseVocoders[channel][proc]->process(magnitude, phase, currentShiftHz);
+                        }
+
+                        // Apply frequency shifting
+                        if (std::abs(currentShiftHz) > 0.01f)
+                        {
+                            std::tie(magnitude, phase) = frequencyShifters[channel][proc]->shift(magnitude, phase, currentShiftHz);
+                        }
+
+                        // Apply musical quantization with optional drift
+                        if (currentQuantizeStrength > 0.01f && quantizer)
+                        {
+                            // Generate drift values if drift is enabled
+                            std::vector<float> driftCentsVec;
+                            const std::vector<float>* driftPtr = nullptr;
+
+                            if (currentDriftAmount > 0.01f)
+                            {
+                                const int numBins = fftSize / 2;
+                                driftCentsVec.resize(static_cast<size_t>(numBins));
+                                for (int bin = 0; bin < numBins; ++bin)
+                                {
+                                    driftCentsVec[static_cast<size_t>(bin)] = driftModulator.getDrift(bin);
+                                }
+                                driftPtr = &driftCentsVec;
+
+                                // Advance drift modulator for next frame (only once per channel 0, proc 0)
+                                if (channel == 0 && proc == 0)
+                                {
+                                    driftModulator.advanceFrame(hopSize);
+                                }
+                            }
+
+                            std::tie(magnitude, phase) = quantizer->quantizeSpectrum(
+                                magnitude, phase, currentSampleRate, fftSize, currentQuantizeStrength, driftPtr);
+                        }
+
+                        // Apply spectral mask (blend wet/dry per frequency bin)
+                        if (currentMaskEnabled && !dryMagnitude.empty())
+                        {
+                            spectralMask.applyMask(magnitude, dryMagnitude);
+                            spectralMask.applyMaskToPhase(phase, dryPhase);
+                        }
+
+                        // Apply spectral delay (frequency-dependent delay)
+                        if (currentDelayEnabled)
+                        {
+                            spectralDelays[channel][proc].process(magnitude, phase);
+                        }
+                    }
+
+                    // Store spectrum data for visualization (only from first channel, first processor)
+                    if (channel == 0 && proc == 0)
+                    {
+                        const juce::SpinLock::ScopedLockType lock(spectrumLock);
+                        const int numBins = std::min(static_cast<int>(magnitude.size()), SPECTRUM_SIZE);
                         for (int bin = 0; bin < numBins; ++bin)
                         {
-                            driftCentsVec[static_cast<size_t>(bin)] = driftModulator.getDrift(bin);
+                            // Convert to dB with smoothing
+                            float magDb = juce::Decibels::gainToDecibels(magnitude[static_cast<size_t>(bin)], -100.0f);
+                            // Normalize to 0-1 range (-100dB to 0dB)
+                            float normalized = (magDb + 100.0f) / 100.0f;
+                            spectrumData[static_cast<size_t>(bin)] = std::max(0.0f, std::min(1.0f, normalized));
                         }
-                        driftPtr = &driftCentsVec;
-
-                        // Advance drift modulator for next frame (only once per channel 0)
-                        if (channel == 0)
-                        {
-                            driftModulator.advanceFrame(hopSize);
-                        }
+                        spectrumDataReady.store(true);
                     }
 
-                    std::tie(magnitude, phase) = quantizer->quantizeSpectrum(
-                        magnitude, phase, currentSampleRate, fftSize, currentQuantizeStrength, driftPtr);
-                }
+                    // Perform inverse STFT
+                    auto outputFrame = stftProcessors[channel][proc]->inverse(magnitude, phase);
 
-                // Apply spectral mask (blend wet/dry per frequency bin)
-                if (currentMaskEnabled && !dryMagnitude.empty())
-                {
-                    spectralMask.applyMask(magnitude, dryMagnitude);
-                    spectralMask.applyMaskToPhase(phase, dryPhase);
-                }
-
-                // Apply spectral delay (frequency-dependent delay)
-                if (currentDelayEnabled)
-                {
-                    spectralDelays[static_cast<size_t>(channel)].process(magnitude, phase);
-                }
-
-                // Store spectrum data for visualization (only from first channel)
-                if (channel == 0)
-                {
-                    const juce::SpinLock::ScopedLockType lock(spectrumLock);
-                    const int numBins = std::min(static_cast<int>(magnitude.size()), SPECTRUM_SIZE);
-                    for (int bin = 0; bin < numBins; ++bin)
+                    // Overlap-add to output buffer
+                    int writePos = (outReadPos + i) % static_cast<int>(outputBuf.size());
+                    for (int j = 0; j < fftSize; ++j)
                     {
-                        // Convert to dB with smoothing
-                        float magDb = juce::Decibels::gainToDecibels(magnitude[static_cast<size_t>(bin)], -100.0f);
-                        // Normalize to 0-1 range (-100dB to 0dB)
-                        float normalized = (magDb + 100.0f) / 100.0f;
-                        spectrumData[static_cast<size_t>(bin)] = std::max(0.0f, std::min(1.0f, normalized));
+                        int pos = (writePos + j) % static_cast<int>(outputBuf.size());
+                        outputBuf[static_cast<size_t>(pos)] += outputFrame[static_cast<size_t>(j)];
                     }
-                    spectrumDataReady.store(true);
                 }
 
-                // Perform inverse STFT
-                auto outputFrame = stftProcessors[channel]->inverse(magnitude, phase);
+                // Read from output buffer
+                procOutput[static_cast<size_t>(i)] = outputBuf[static_cast<size_t>(outReadPos)];
+                outputBuf[static_cast<size_t>(outReadPos)] = 0.0f;  // Clear for next overlap-add
+                outReadPos = (outReadPos + 1) % static_cast<int>(outputBuf.size());
+            }
+        }
 
-                // Overlap-add to output buffer
-                int writePos = (outputReadPos[channel] + i) % static_cast<int>(outputBuffers[channel].size());
-                for (int j = 0; j < fftSize; ++j)
-                {
-                    int pos = (writePos + j) % static_cast<int>(outputBuffers[channel].size());
-                    outputBuffers[channel][static_cast<size_t>(pos)] += outputFrame[static_cast<size_t>(j)];
-                }
+        // Crossfade between the two processor outputs (equal-power crossfade)
+        // gain1^2 + gain2^2 = 1 for equal power
+        const float angle = crossfade * static_cast<float>(M_PI) * 0.5f;
+        const float gain0 = std::cos(angle);
+        const float gain1 = std::sin(angle);
+
+        for (int i = 0; i < numSamples; ++i)
+        {
+            float processed;
+            if (singleProc)
+            {
+                processed = proc0Output[static_cast<size_t>(i)];
+            }
+            else
+            {
+                processed = proc0Output[static_cast<size_t>(i)] * gain0 + proc1Output[static_cast<size_t>(i)] * gain1;
             }
 
-            // Read from output buffer
-            channelData[i] = outputBuffers[channel][static_cast<size_t>(outputReadPos[channel])];
-            outputBuffers[channel][static_cast<size_t>(outputReadPos[channel])] = 0.0f;  // Clear for next overlap-add
-            outputReadPos[channel] = (outputReadPos[channel] + 1) % static_cast<int>(outputBuffers[channel].size());
+            // Apply delay compensation to maintain fixed latency to host
+            // The host expects MAX_FFT_SIZE latency, so we add extra delay for smaller FFT sizes
+            int effectiveFftSize = singleProc ? currentFftSizes[0] :
+                static_cast<int>(static_cast<float>(currentFftSizes[0]) * gain0 * gain0 +
+                                 static_cast<float>(currentFftSizes[1]) * gain1 * gain1);
+            int delayNeeded = MAX_FFT_SIZE - effectiveFftSize;
+
+            // Write to delay compensation buffer
+            delayCompBuffers[channel][static_cast<size_t>(delayCompWritePos[channel])] = processed;
+            delayCompWritePos[channel] = (delayCompWritePos[channel] + 1) % static_cast<int>(delayCompBuffers[channel].size());
+
+            // Read from delay compensation buffer with the needed delay
+            int readIdx = (delayCompWritePos[channel] - delayNeeded - 1 + static_cast<int>(delayCompBuffers[channel].size()))
+                         % static_cast<int>(delayCompBuffers[channel].size());
+            channelData[i] = delayCompBuffers[channel][static_cast<size_t>(readIdx)];
         }
 
         // Apply dry/wet mix
         if (currentDryWet < 0.99f)
         {
+            // For dry signal, we also need delay compensation
             for (int i = 0; i < numSamples; ++i)
             {
-                channelData[i] = drySignal[static_cast<size_t>(i)] * (1.0f - currentDryWet) + channelData[i] * currentDryWet;
+                // Use the same effective delay for dry signal
+                int delayIdx = (i + MAX_FFT_SIZE < numSamples) ? i : i;  // Simplified - dry already stored
+                float drySample = drySignal[static_cast<size_t>(i)];
+                channelData[i] = drySample * (1.0f - currentDryWet) + channelData[i] * currentDryWet;
             }
         }
     }
@@ -756,13 +893,14 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
 
 int FrequencyShifterProcessor::getLatencySamples() const
 {
-    return currentFftSize;
+    // Always report fixed latency for DAW timing stability
+    return MAX_FFT_SIZE;
 }
 
 double FrequencyShifterProcessor::getTailLengthSeconds() const
 {
-    // Latency from FFT processing
-    return static_cast<double>(currentFftSize + currentHopSize) / currentSampleRate;
+    // Latency from FFT processing (use max for consistency)
+    return static_cast<double>(MAX_FFT_SIZE + MAX_FFT_SIZE / 4) / currentSampleRate;
 }
 
 juce::AudioProcessorEditor* FrequencyShifterProcessor::createEditor()

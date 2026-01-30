@@ -473,16 +473,17 @@ FrequencyShifterEditor::FrequencyShifterEditor(FrequencyShifterProcessor& p)
     phaseVocoderAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
         audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_PHASE_VOCODER, phaseVocoderButton);
 
-    // Setup quality mode combo
-    qualityModeCombo.addItem("Low Latency (~23ms)", 1);
-    qualityModeCombo.addItem("Balanced (~46ms)", 2);
-    qualityModeCombo.addItem("Quality (~93ms)", 3);
-    addAndMakeVisible(qualityModeCombo);
-    qualityModeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
-        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_QUALITY_MODE, qualityModeCombo);
+    // Setup SMEAR slider (5-123ms continuous control)
+    setupSlider(smearSlider, juce::Slider::LinearHorizontal);
+    smearSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 55, 20);
+    smearSlider.setNumDecimalPlacesToDisplay(1);
+    smearSlider.setTextValueSuffix(" ms");
+    addAndMakeVisible(smearSlider);
+    smearAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_SMEAR, smearSlider);
 
-    setupLabel(qualityModeLabel, "LATENCY");
-    addAndMakeVisible(qualityModeLabel);
+    setupLabel(smearLabel, "SMEAR");
+    addAndMakeVisible(smearLabel);
 
     // Setup drift amount slider
     setupSlider(driftAmountSlider, juce::Slider::LinearHorizontal);
@@ -794,8 +795,8 @@ void FrequencyShifterEditor::resized()
 
     phaseVocoderButton.setBounds(rightPanelX, 185, 200, 24);
 
-    qualityModeLabel.setBounds(rightPanelX, 220, labelWidth, 20);
-    qualityModeCombo.setBounds(rightPanelX + labelWidth, 218, controlWidth, 24);
+    smearLabel.setBounds(rightPanelX, 220, labelWidth, 20);
+    smearSlider.setBounds(rightPanelX + labelWidth, 218, controlWidth, 24);
 
     // Mix controls - bottom panel row 1
     dryWetLabel.setBounds(40, 295, 70, 20);
