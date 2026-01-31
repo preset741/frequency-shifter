@@ -928,14 +928,28 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
                     int fbBufSize = static_cast<int>(fbBuffer.size());
 
                     // Calculate delay in samples from TIME parameter
-                    int delaySamples = static_cast<int>(currentDelayTimeMs * currentSampleRate / 1000.0f);
-                    delaySamples = std::clamp(delaySamples, 1, fbBufSize - 1);
+                    // IMPORTANT: Compensate for SMEAR-dependent FFT latency!
+                    // The feedback path goes through FFT processing, which adds latency
+                    // that varies with SMEAR setting. We subtract this to keep delay
+                    // timing consistent regardless of SMEAR.
+                    //
+                    // FFT latency is approximately fftSize samples (input buffering + output overlap)
+                    // We use the primary processor's FFT size (proc 0) since that's where
+                    // feedback is injected.
+                    int currentFftLatencySamples = currentFftSizes[0];  // SMEAR-dependent latency
+
+                    int rawDelaySamples = static_cast<int>(currentDelayTimeMs * currentSampleRate / 1000.0f);
+                    int delaySamples = rawDelaySamples - currentFftLatencySamples;
+
+                    // Ensure minimum delay of ~10ms to prevent artifacts
+                    int minDelaySamples = static_cast<int>(10.0f * currentSampleRate / 1000.0f);
+                    delaySamples = std::clamp(delaySamples, minDelaySamples, fbBufSize - 1);
 
                     // Read from feedback buffer
                     int fbReadPos = (feedbackWritePos[static_cast<size_t>(channel)] - delaySamples + fbBufSize) % fbBufSize;
                     float feedbackSample = fbBuffer[static_cast<size_t>(fbReadPos)];
 
-                    // Apply feedback amount
+                    // Apply feedback amount (controls cascade strength)
                     feedbackSample *= currentFeedbackAmount;
 
                     // Soft clip feedback for safety (tanh-style)
@@ -944,13 +958,11 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
                         feedbackSample = std::tanh(feedbackSample);
                     }
 
-                    // Apply MIX control to the delayed echo level
-                    // MIX=0%: No delayed echoes audible
-                    // MIX=100%: Full delayed echoes
-                    feedbackSample *= currentDelayMixAmount;
-
-                    // Add feedback to input - this creates cascading pitch shifts
-                    inputSample += feedbackSample;
+                    // MIX controls echo level added to the input
+                    // At MIX=0%: No echoes added to input (clean shifted signal)
+                    // At MIX=100%: Full echo level added (shifted + echoes)
+                    // Note: Direct signal always passes through; MIX adds echo on top
+                    inputSample += feedbackSample * currentDelayMixAmount;
 
                     // DEBUG: Log feedback activity (once per second per channel)
                     static int debugCounter = 0;
@@ -959,9 +971,12 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
                         DBG("=== Delay Feedback Debug ===");
                         DBG("Feedback sample: " + juce::String(feedbackSample, 6));
                         DBG("Input after feedback: " + juce::String(inputSample, 6));
-                        DBG("Delay time: " + juce::String(currentDelayTimeMs) + " ms");
+                        DBG("Requested delay: " + juce::String(currentDelayTimeMs) + " ms");
+                        DBG("FFT latency compensation: " + juce::String(currentFftLatencySamples) + " samples ("
+                            + juce::String(currentFftLatencySamples * 1000.0f / currentSampleRate, 1) + " ms)");
+                        DBG("Raw delay samples: " + juce::String(rawDelaySamples));
+                        DBG("Compensated delay samples: " + juce::String(delaySamples));
                         DBG("Feedback amount: " + juce::String(currentFeedbackAmount * 100.0f) + "%");
-                        DBG("Delay samples: " + juce::String(delaySamples));
                     }
                 }
 
@@ -1057,6 +1072,8 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
                         // Apply spectral delay (frequency-dependent delay)
                         if (currentDelayEnabled)
                         {
+                            // Update spectral delay with tempo-synced time (if sync enabled)
+                            spectralDelays[channel][proc].setDelayTime(currentDelayTimeMs);
                             spectralDelays[channel][proc].process(magnitude, phase);
                         }
                     }
