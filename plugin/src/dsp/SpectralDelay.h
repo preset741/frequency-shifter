@@ -169,21 +169,24 @@ public:
             // Apply feedback with damping
             float feedbackMag = delayedMag * feedback * dampFactor;
 
+            // Store dry magnitude before writing to delay line
+            float dryMag = magnitude[binIdx];
+            float dryPhase = phase[binIdx];
+
             // Write to delay line (input + feedback)
-            magnitudeBuffers[binIdx][static_cast<size_t>(writePos)] = magnitude[binIdx] + feedbackMag;
-            phaseBuffers[binIdx][static_cast<size_t>(writePos)] = phase[binIdx];
+            magnitudeBuffers[binIdx][static_cast<size_t>(writePos)] = dryMag + feedbackMag;
+            phaseBuffers[binIdx][static_cast<size_t>(writePos)] = dryPhase;
 
-            // Mix: dry signal + wet delayed signal (additive mix, not crossfade)
-            // At mix=0: only dry, at mix=100: dry + full delayed signal
-            float wetSignal = delayedMag * gain * mix;
-            magnitude[binIdx] = magnitude[binIdx] + wetSignal;
+            // Mix: crossfade between dry and wet (delayed) signal
+            // At mix=0: 100% dry, 0% wet
+            // At mix=100: 0% dry, 100% wet
+            float wetMag = delayedMag * gain;
+            magnitude[binIdx] = dryMag * (1.0f - mix) + wetMag * mix;
 
-            // Blend phase towards delayed phase based on wet/dry ratio
-            if (wetSignal > magnitude[binIdx] * 0.1f && delayedMag > 0.001f)
+            // Blend phase based on mix ratio
+            if (mix > 0.01f && delayedMag > 0.001f)
             {
-                float wetRatio = wetSignal / (magnitude[binIdx] + 0.0001f);
-                wetRatio = std::clamp(wetRatio, 0.0f, 1.0f);
-                phase[binIdx] = phase[binIdx] * (1.0f - wetRatio * 0.5f) + delayedPhase * wetRatio * 0.5f;
+                phase[binIdx] = dryPhase * (1.0f - mix) + delayedPhase * mix;
             }
 
             // Advance write position

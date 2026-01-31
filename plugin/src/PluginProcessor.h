@@ -82,10 +82,13 @@ public:
     static constexpr const char* PARAM_MASK_TRANSITION = "maskTransition";
     static constexpr const char* PARAM_DELAY_ENABLED = "delayEnabled";
     static constexpr const char* PARAM_DELAY_TIME = "delayTime";
+    static constexpr const char* PARAM_DELAY_SYNC = "delaySync";       // Tempo sync toggle
+    static constexpr const char* PARAM_DELAY_DIVISION = "delayDivision"; // Tempo division when synced
     static constexpr const char* PARAM_DELAY_SLOPE = "delaySlope";
     static constexpr const char* PARAM_DELAY_FEEDBACK = "delayFeedback";
     static constexpr const char* PARAM_DELAY_DAMPING = "delayDamping";
-    static constexpr const char* PARAM_DELAY_MIX = "delayMix";
+    static constexpr const char* PARAM_DELAY_DIFFUSE = "delayDiffuse";  // Spectral delay wet/dry (smear effect)
+    static constexpr const char* PARAM_DELAY_MIX = "delayMix";          // Time-domain delay echo level
     static constexpr const char* PARAM_DELAY_GAIN = "delayGain";
 
     // Phase 2B: Envelope preservation and transient detection
@@ -160,10 +163,14 @@ private:
     std::atomic<bool> maskNeedsUpdate{ true };
     std::atomic<bool> delayEnabled{ false };
     std::atomic<float> delayTime{ 200.0f };
+    std::atomic<bool> delaySync{ false };      // Tempo sync on/off
+    std::atomic<int> delayDivision{ 8 };       // Default to 1/4 note (index 8)
     std::atomic<float> delaySlope{ 0.0f };
+    std::atomic<double> hostBpm{ 120.0 };      // Cached host tempo
     std::atomic<float> delayFeedback{ 30.0f };
     std::atomic<float> delayDamping{ 30.0f };
-    std::atomic<float> delayMix{ 50.0f };
+    std::atomic<float> delayDiffuse{ 50.0f };  // Spectral delay wet/dry (smear effect)
+    std::atomic<float> delayMix{ 100.0f };     // Time-domain delay echo level (0-100%)
     std::atomic<float> delayGain{ 0.0f };  // dB
 
     // Phase 2B: Envelope preservation and transient detection
@@ -216,6 +223,45 @@ private:
     // Must delay by full reported latency (MAX_FFT_SIZE samples)
     std::array<std::vector<float>, MAX_CHANNELS> dryDelayBuffers;
     std::array<int, MAX_CHANNELS> dryDelayWritePos{};
+
+    // Time-domain feedback buffer for cascading pitch shifts
+    // Feedback routes back to INPUT of shifter, so each repeat gets shifted again
+    // Signal flow: Input + Feedback → FFT → Shift → Spectral Delay → IFFT → Output
+    //                      ↑_____________________________________________↓
+    static constexpr int MAX_FEEDBACK_DELAY_SAMPLES = 96000;  // ~2 seconds at 48kHz
+    std::array<std::vector<float>, MAX_CHANNELS> feedbackBuffers;
+    std::array<int, MAX_CHANNELS> feedbackWritePos{};
+
+    // Simple one-pole lowpass for feedback damping
+    std::array<float, MAX_CHANNELS> feedbackFilterState{};
+    float feedbackFilterCoeff = 0.5f;  // Calculated from damping parameter
+
+    // Two-pole highpass filter (80Hz) to prevent low frequency buildup
+    // Biquad state: [x1, x2, y1, y2] per channel
+    std::array<std::array<float, 4>, MAX_CHANNELS> feedbackHpfState{};
+    // Biquad coefficients: [b0, b1, b2, a1, a2] (a0 normalized to 1)
+    std::array<float, 5> feedbackHpfCoeffs{};
+
+    // Tempo sync division multipliers (relative to quarter note)
+    static constexpr int NUM_TEMPO_DIVISIONS = 16;
+    static constexpr float TEMPO_DIVISION_MULTIPLIERS[NUM_TEMPO_DIVISIONS] = {
+        0.125f,   // 1/32
+        0.1667f,  // 1/16T
+        0.25f,    // 1/16
+        0.375f,   // 1/16D
+        0.3333f,  // 1/8T
+        0.5f,     // 1/8
+        0.75f,    // 1/8D
+        0.6667f,  // 1/4T
+        1.0f,     // 1/4
+        1.5f,     // 1/4D
+        1.3333f,  // 1/2T
+        2.0f,     // 1/2
+        3.0f,     // 1/2D
+        4.0f,     // 1/1
+        8.0f,     // 2/1
+        16.0f     // 4/1
+    };
 
     // Spectrum visualization data (thread-safe FIFO)
     std::array<float, SPECTRUM_SIZE> spectrumData{};

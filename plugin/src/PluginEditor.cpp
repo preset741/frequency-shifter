@@ -657,6 +657,38 @@ FrequencyShifterEditor::FrequencyShifterEditor(FrequencyShifterProcessor& p)
     setupLabel(delayTimeLabel, "TIME");
     addAndMakeVisible(delayTimeLabel);
 
+    // Delay sync toggle
+    delaySyncButton.setButtonText("Sync");
+    delaySyncButton.setColour(juce::ToggleButton::textColourId, juce::Colour(Colors::text));
+    delaySyncButton.onClick = [this]() { updateDelaySyncUI(); };
+    addAndMakeVisible(delaySyncButton);
+    delaySyncAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_DELAY_SYNC, delaySyncButton);
+
+    // Delay division combo (tempo sync divisions)
+    delayDivisionCombo.addItem("1/32", 1);
+    delayDivisionCombo.addItem("1/16T", 2);
+    delayDivisionCombo.addItem("1/16", 3);
+    delayDivisionCombo.addItem("1/16D", 4);
+    delayDivisionCombo.addItem("1/8T", 5);
+    delayDivisionCombo.addItem("1/8", 6);
+    delayDivisionCombo.addItem("1/8D", 7);
+    delayDivisionCombo.addItem("1/4T", 8);
+    delayDivisionCombo.addItem("1/4", 9);
+    delayDivisionCombo.addItem("1/4D", 10);
+    delayDivisionCombo.addItem("1/2T", 11);
+    delayDivisionCombo.addItem("1/2", 12);
+    delayDivisionCombo.addItem("1/2D", 13);
+    delayDivisionCombo.addItem("1/1", 14);
+    delayDivisionCombo.addItem("2/1", 15);
+    delayDivisionCombo.addItem("4/1", 16);
+    addAndMakeVisible(delayDivisionCombo);
+    delayDivisionAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_DELAY_DIVISION, delayDivisionCombo);
+
+    setupLabel(delayDivisionLabel, "DIV");
+    addAndMakeVisible(delayDivisionLabel);
+
     // Delay slope slider
     setupSlider(delaySlopeSlider, juce::Slider::LinearHorizontal);
     delaySlopeSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
@@ -690,7 +722,18 @@ FrequencyShifterEditor::FrequencyShifterEditor(FrequencyShifterProcessor& p)
     setupLabel(delayDampingLabel, "DAMP");
     addAndMakeVisible(delayDampingLabel);
 
-    // Delay mix slider
+    // Delay diffuse slider (spectral delay wet/dry - smear effect)
+    setupSlider(delayDiffuseSlider, juce::Slider::LinearHorizontal);
+    delayDiffuseSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
+    delayDiffuseSlider.setNumDecimalPlacesToDisplay(0);
+    addAndMakeVisible(delayDiffuseSlider);
+    delayDiffuseAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_DELAY_DIFFUSE, delayDiffuseSlider);
+
+    setupLabel(delayDiffuseLabel, "DIFFUSE");
+    addAndMakeVisible(delayDiffuseLabel);
+
+    // Delay mix slider (time-domain delay echo level)
     setupSlider(delayMixSlider, juce::Slider::LinearHorizontal);
     delayMixSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
     delayMixSlider.setNumDecimalPlacesToDisplay(0);
@@ -700,17 +743,6 @@ FrequencyShifterEditor::FrequencyShifterEditor(FrequencyShifterProcessor& p)
 
     setupLabel(delayMixLabel, "MIX");
     addAndMakeVisible(delayMixLabel);
-
-    // Delay gain slider
-    setupSlider(delayGainSlider, juce::Slider::LinearHorizontal);
-    delayGainSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
-    delayGainSlider.setNumDecimalPlacesToDisplay(1);
-    addAndMakeVisible(delayGainSlider);
-    delayGainAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
-        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_DELAY_GAIN, delayGainSlider);
-
-    setupLabel(delayGainLabel, "GAIN");
-    addAndMakeVisible(delayGainLabel);
 
     // Setup spectrum analyzer toggle
     spectrumButton.setButtonText("Spectrum");
@@ -736,6 +768,9 @@ FrequencyShifterEditor::FrequencyShifterEditor(FrequencyShifterProcessor& p)
 
     // Set editor size (increased by 60 to accommodate Phase 2B controls)
     setSize(640, 670);
+
+    // Initialize delay sync UI state
+    updateDelaySyncUI();
 }
 
 FrequencyShifterEditor::~FrequencyShifterEditor()
@@ -884,27 +919,32 @@ void FrequencyShifterEditor::resized()
     maskHighFreqLabel.setBounds(330, 547, 40, 20);
     maskHighFreqSlider.setBounds(370, 545, 240, 24);
 
-    // Delay controls - row 1: toggle, time, slope
+    // Delay controls - row 1: toggle, time, sync, division, slope
     delayEnabledButton.setBounds(30, 600, 60, 24);
 
-    delayTimeLabel.setBounds(100, 602, 40, 20);
-    delayTimeSlider.setBounds(140, 600, 140, 24);
+    delayTimeLabel.setBounds(95, 602, 35, 20);
+    delayTimeSlider.setBounds(130, 600, 120, 24);
 
-    delaySlopeLabel.setBounds(295, 602, 45, 20);
-    delaySlopeSlider.setBounds(340, 600, 120, 24);
+    delaySyncButton.setBounds(255, 600, 55, 24);
 
-    delayMixLabel.setBounds(475, 602, 30, 20);
-    delayMixSlider.setBounds(505, 600, 105, 24);
+    delayDivisionLabel.setBounds(310, 602, 25, 20);
+    delayDivisionCombo.setBounds(335, 600, 70, 24);
 
-    // Delay controls - row 2: feedback, damping, gain
-    delayFeedbackLabel.setBounds(30, 632, 40, 20);
-    delayFeedbackSlider.setBounds(70, 630, 120, 24);
+    delaySlopeLabel.setBounds(415, 602, 45, 20);
+    delaySlopeSlider.setBounds(460, 600, 150, 24);
 
-    delayDampingLabel.setBounds(200, 632, 45, 20);
-    delayDampingSlider.setBounds(245, 630, 120, 24);
+    // Delay controls - row 2: feedback, damping, diffuse, mix
+    delayFeedbackLabel.setBounds(30, 632, 35, 20);
+    delayFeedbackSlider.setBounds(65, 630, 100, 24);
 
-    delayGainLabel.setBounds(380, 632, 40, 20);
-    delayGainSlider.setBounds(420, 630, 120, 24);
+    delayDampingLabel.setBounds(175, 632, 40, 20);
+    delayDampingSlider.setBounds(215, 630, 90, 24);
+
+    delayDiffuseLabel.setBounds(315, 632, 55, 20);
+    delayDiffuseSlider.setBounds(370, 630, 90, 24);
+
+    delayMixLabel.setBounds(470, 632, 30, 20);
+    delayMixSlider.setBounds(500, 630, 110, 24);
 
     // Spectrum analyzer (below main controls when visible)
     if (spectrumAnalyzer && spectrumVisible)
@@ -928,5 +968,20 @@ void FrequencyShifterEditor::sliderValueChanged(juce::Slider* slider)
             param->setValueNotifyingHost(normalized);
         }
     }
+}
+
+void FrequencyShifterEditor::updateDelaySyncUI()
+{
+    bool syncEnabled = delaySyncButton.getToggleState();
+
+    // When SYNC is ON: disable TIME slider, enable DIV dropdown
+    // When SYNC is OFF: enable TIME slider, disable DIV dropdown
+    delayTimeSlider.setEnabled(!syncEnabled);
+    delayTimeSlider.setAlpha(syncEnabled ? 0.4f : 1.0f);
+    delayTimeLabel.setAlpha(syncEnabled ? 0.4f : 1.0f);
+
+    delayDivisionCombo.setEnabled(syncEnabled);
+    delayDivisionCombo.setAlpha(syncEnabled ? 1.0f : 0.4f);
+    delayDivisionLabel.setAlpha(syncEnabled ? 1.0f : 0.4f);
 }
 

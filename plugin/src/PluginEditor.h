@@ -213,6 +213,16 @@ private:
     juce::Label delayTimeLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> delayTimeAttachment;
 
+    juce::ToggleButton delaySyncButton;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> delaySyncAttachment;
+
+    juce::ComboBox delayDivisionCombo;
+    juce::Label delayDivisionLabel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> delayDivisionAttachment;
+
+    // Timer to update UI state based on sync toggle
+    void updateDelaySyncUI();
+
     juce::Slider delaySlopeSlider;
     juce::Label delaySlopeLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> delaySlopeAttachment;
@@ -225,13 +235,13 @@ private:
     juce::Label delayDampingLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> delayDampingAttachment;
 
+    juce::Slider delayDiffuseSlider;
+    juce::Label delayDiffuseLabel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> delayDiffuseAttachment;
+
     juce::Slider delayMixSlider;
     juce::Label delayMixLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> delayMixAttachment;
-
-    juce::Slider delayGainSlider;
-    juce::Label delayGainLabel;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> delayGainAttachment;
 
     // UI colors (for easy customization)
     struct Colors

@@ -29,9 +29,12 @@ FrequencyShifterProcessor::FrequencyShifterProcessor()
     parameters.addParameterListener(PARAM_MASK_TRANSITION, this);
     parameters.addParameterListener(PARAM_DELAY_ENABLED, this);
     parameters.addParameterListener(PARAM_DELAY_TIME, this);
+    parameters.addParameterListener(PARAM_DELAY_SYNC, this);
+    parameters.addParameterListener(PARAM_DELAY_DIVISION, this);
     parameters.addParameterListener(PARAM_DELAY_SLOPE, this);
     parameters.addParameterListener(PARAM_DELAY_FEEDBACK, this);
     parameters.addParameterListener(PARAM_DELAY_DAMPING, this);
+    parameters.addParameterListener(PARAM_DELAY_DIFFUSE, this);
     parameters.addParameterListener(PARAM_DELAY_MIX, this);
     parameters.addParameterListener(PARAM_DELAY_GAIN, this);
     parameters.addParameterListener(PARAM_PRESERVE, this);
@@ -64,9 +67,12 @@ FrequencyShifterProcessor::~FrequencyShifterProcessor()
     parameters.removeParameterListener(PARAM_MASK_TRANSITION, this);
     parameters.removeParameterListener(PARAM_DELAY_ENABLED, this);
     parameters.removeParameterListener(PARAM_DELAY_TIME, this);
+    parameters.removeParameterListener(PARAM_DELAY_SYNC, this);
+    parameters.removeParameterListener(PARAM_DELAY_DIVISION, this);
     parameters.removeParameterListener(PARAM_DELAY_SLOPE, this);
     parameters.removeParameterListener(PARAM_DELAY_FEEDBACK, this);
     parameters.removeParameterListener(PARAM_DELAY_DAMPING, this);
+    parameters.removeParameterListener(PARAM_DELAY_DIFFUSE, this);
     parameters.removeParameterListener(PARAM_DELAY_MIX, this);
     parameters.removeParameterListener(PARAM_DELAY_GAIN, this);
     parameters.removeParameterListener(PARAM_PRESERVE, this);
@@ -286,6 +292,26 @@ juce::AudioProcessorValueTreeState::ParameterLayout FrequencyShifterProcessor::c
         200.0f,
         juce::AudioParameterFloatAttributes().withLabel("ms")));
 
+    // Delay tempo sync toggle
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID{ PARAM_DELAY_SYNC, 1 },
+        "Sync",
+        false));  // Default to free-running (ms)
+
+    // Delay tempo division (when synced)
+    juce::StringArray divisionNames{
+        "1/32", "1/16T", "1/16", "1/16D",
+        "1/8T", "1/8", "1/8D",
+        "1/4T", "1/4", "1/4D",
+        "1/2T", "1/2", "1/2D",
+        "1/1", "2/1", "4/1"
+    };
+    params.push_back(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID{ PARAM_DELAY_DIVISION, 1 },
+        "Division",
+        divisionNames,
+        8));  // Default to 1/4
+
     // Delay frequency slope (-100 to +100%)
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID{ PARAM_DELAY_SLOPE, 1 },
@@ -310,12 +336,20 @@ juce::AudioProcessorValueTreeState::ParameterLayout FrequencyShifterProcessor::c
         30.0f,
         juce::AudioParameterFloatAttributes().withLabel("%")));
 
-    // Delay mix (0-100%)
+    // Delay diffuse (0-100%) - spectral delay wet/dry (smear effect)
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID{ PARAM_DELAY_MIX, 1 },
-        "Delay Mix",
+        juce::ParameterID{ PARAM_DELAY_DIFFUSE, 1 },
+        "Diffuse",
         juce::NormalisableRange<float>(0.0f, 100.0f, 0.1f),
         50.0f,
+        juce::AudioParameterFloatAttributes().withLabel("%")));
+
+    // Delay mix (0-100%) - time-domain delay echo level
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID{ PARAM_DELAY_MIX, 1 },
+        "Mix",
+        juce::NormalisableRange<float>(0.0f, 100.0f, 0.1f),
+        100.0f,
         juce::AudioParameterFloatAttributes().withLabel("%")));
 
     // Delay gain (-12 to +24 dB)
@@ -479,6 +513,14 @@ void FrequencyShifterProcessor::parameterChanged(const juce::String& parameterID
             for (auto& delay : chDelays)
                 delay.setDelayTime(newValue);
     }
+    else if (parameterID == PARAM_DELAY_SYNC)
+    {
+        delaySync.store(newValue > 0.5f);
+    }
+    else if (parameterID == PARAM_DELAY_DIVISION)
+    {
+        delayDivision.store(static_cast<int>(newValue));
+    }
     else if (parameterID == PARAM_DELAY_SLOPE)
     {
         delaySlope.store(newValue);
@@ -499,13 +541,25 @@ void FrequencyShifterProcessor::parameterChanged(const juce::String& parameterID
         for (auto& chDelays : spectralDelays)
             for (auto& delay : chDelays)
                 delay.setDamping(newValue);
+
+        // Calculate feedback filter coefficient for time-domain damping
+        // 0% damping = 12kHz cutoff, 100% damping = 1kHz cutoff (logarithmic)
+        float dampNorm = newValue / 100.0f;
+        float cutoffHz = 12000.0f * std::pow(1000.0f / 12000.0f, dampNorm);
+        // One-pole lowpass: coeff = exp(-2*pi*fc/fs)
+        feedbackFilterCoeff = std::exp(-2.0f * static_cast<float>(M_PI) * cutoffHz / static_cast<float>(currentSampleRate));
+    }
+    else if (parameterID == PARAM_DELAY_DIFFUSE)
+    {
+        delayDiffuse.store(newValue);
+        for (auto& chDelays : spectralDelays)
+            for (auto& delay : chDelays)
+                delay.setMix(newValue);  // Spectral delay uses "mix" internally for diffuse
     }
     else if (parameterID == PARAM_DELAY_MIX)
     {
         delayMix.store(newValue);
-        for (auto& chDelays : spectralDelays)
-            for (auto& delay : chDelays)
-                delay.setMix(newValue);
+        // This controls time-domain delay echo level, used in processBlock
     }
     else if (parameterID == PARAM_DELAY_GAIN)
     {
@@ -687,10 +741,44 @@ void FrequencyShifterProcessor::reinitializeDsp()
             spectralDelays[ch][proc].prepare(currentSampleRate, fftSize, hopSize);
             spectralDelays[ch][proc].setDelayTime(delayTime.load());
             spectralDelays[ch][proc].setFrequencySlope(delaySlope.load());
-            spectralDelays[ch][proc].setFeedback(delayFeedback.load() / 100.0f);
+            spectralDelays[ch][proc].setFeedback(0.0f);  // Disable spectral delay internal feedback
             spectralDelays[ch][proc].setDamping(delayDamping.load());
-            spectralDelays[ch][proc].setMix(delayMix.load());
+            spectralDelays[ch][proc].setMix(delayDiffuse.load());  // Spectral delay uses "mix" for diffuse amount
             spectralDelays[ch][proc].setGain(delayGain.load());
+        }
+
+        // Initialize time-domain feedback buffer for cascading pitch shifts
+        feedbackBuffers[static_cast<size_t>(ch)].resize(MAX_FEEDBACK_DELAY_SAMPLES, 0.0f);
+        feedbackWritePos[static_cast<size_t>(ch)] = 0;
+        feedbackFilterState[static_cast<size_t>(ch)] = 0.0f;
+    }
+
+    // Calculate initial feedback filter coefficient (lowpass for damping)
+    float dampNorm = delayDamping.load() / 100.0f;
+    float cutoffHz = 12000.0f * std::pow(1000.0f / 12000.0f, dampNorm);
+    feedbackFilterCoeff = std::exp(-2.0f * static_cast<float>(M_PI) * cutoffHz / static_cast<float>(currentSampleRate));
+
+    // Calculate highpass filter coefficients (80Hz, Q=0.707, Butterworth)
+    // This prevents low frequency buildup in the feedback loop
+    {
+        const float hpfCutoff = 80.0f;
+        const float Q = 0.707f;
+        const float omega = 2.0f * static_cast<float>(M_PI) * hpfCutoff / static_cast<float>(currentSampleRate);
+        const float sinOmega = std::sin(omega);
+        const float cosOmega = std::cos(omega);
+        const float alpha = sinOmega / (2.0f * Q);
+
+        const float a0 = 1.0f + alpha;
+        feedbackHpfCoeffs[0] = (1.0f + cosOmega) / 2.0f / a0;  // b0
+        feedbackHpfCoeffs[1] = -(1.0f + cosOmega) / a0;         // b1
+        feedbackHpfCoeffs[2] = (1.0f + cosOmega) / 2.0f / a0;  // b2
+        feedbackHpfCoeffs[3] = -(-2.0f * cosOmega) / a0;        // -a1 (negated for direct form)
+        feedbackHpfCoeffs[4] = -(1.0f - alpha) / a0;            // -a2 (negated for direct form)
+
+        // Reset HPF state
+        for (int ch = 0; ch < MAX_CHANNELS; ++ch)
+        {
+            feedbackHpfState[static_cast<size_t>(ch)].fill(0.0f);
         }
     }
 
@@ -758,6 +846,38 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
     const float currentDriftAmount = driftAmount.load();
     const bool currentMaskEnabled = maskEnabled.load();
     const bool currentDelayEnabled = delayEnabled.load();
+    const bool currentDelaySync = delaySync.load();
+    const int currentDelayDivision = delayDivision.load();
+    const float currentFeedbackAmount = delayFeedback.load() / 100.0f;  // 0-0.95
+    const float currentDelayMixAmount = delayMix.load() / 100.0f;  // 0-1, controls echo level
+
+    // Read host tempo for tempo sync
+    double currentBpm = 120.0;  // Fallback
+    if (auto* playHead = getPlayHead())
+    {
+        if (auto position = playHead->getPosition())
+        {
+            if (auto tempo = position->getBpm())
+            {
+                currentBpm = *tempo;
+            }
+        }
+    }
+    hostBpm.store(currentBpm);
+
+    // Calculate actual delay time (either from TIME parameter or tempo sync)
+    float currentDelayTimeMs;
+    if (currentDelaySync && currentDelayDivision >= 0 && currentDelayDivision < NUM_TEMPO_DIVISIONS)
+    {
+        // Tempo synced: calculate from BPM and division
+        double quarterNoteMs = 60000.0 / currentBpm;
+        currentDelayTimeMs = static_cast<float>(quarterNoteMs * TEMPO_DIVISION_MULTIPLIERS[currentDelayDivision]);
+    }
+    else
+    {
+        // Free running: use TIME parameter directly
+        currentDelayTimeMs = delayTime.load();
+    }
 
     // Cache crossfade value
     const float crossfade = currentCrossfade;
@@ -797,8 +917,56 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
             // Process through STFT pipeline
             for (int i = 0; i < numSamples; ++i)
             {
-                // Write input sample to circular buffer
-                inputBuf[static_cast<size_t>(inWritePos)] = drySignal[static_cast<size_t>(i)];
+                // Start with dry input sample
+                float inputSample = drySignal[static_cast<size_t>(i)];
+
+                // Add feedback from time-domain buffer (only once per sample, on proc 0)
+                // This routes feedback BEFORE the shifter for cascading pitch shifts
+                if (currentDelayEnabled && proc == 0 && currentFeedbackAmount > 0.01f)
+                {
+                    auto& fbBuffer = feedbackBuffers[static_cast<size_t>(channel)];
+                    int fbBufSize = static_cast<int>(fbBuffer.size());
+
+                    // Calculate delay in samples from TIME parameter
+                    int delaySamples = static_cast<int>(currentDelayTimeMs * currentSampleRate / 1000.0f);
+                    delaySamples = std::clamp(delaySamples, 1, fbBufSize - 1);
+
+                    // Read from feedback buffer
+                    int fbReadPos = (feedbackWritePos[static_cast<size_t>(channel)] - delaySamples + fbBufSize) % fbBufSize;
+                    float feedbackSample = fbBuffer[static_cast<size_t>(fbReadPos)];
+
+                    // Apply feedback amount
+                    feedbackSample *= currentFeedbackAmount;
+
+                    // Soft clip feedback for safety (tanh-style)
+                    if (std::abs(feedbackSample) > 0.95f)
+                    {
+                        feedbackSample = std::tanh(feedbackSample);
+                    }
+
+                    // Apply MIX control to the delayed echo level
+                    // MIX=0%: No delayed echoes audible
+                    // MIX=100%: Full delayed echoes
+                    feedbackSample *= currentDelayMixAmount;
+
+                    // Add feedback to input - this creates cascading pitch shifts
+                    inputSample += feedbackSample;
+
+                    // DEBUG: Log feedback activity (once per second per channel)
+                    static int debugCounter = 0;
+                    if (channel == 0 && ++debugCounter % static_cast<int>(currentSampleRate) == 0)
+                    {
+                        DBG("=== Delay Feedback Debug ===");
+                        DBG("Feedback sample: " + juce::String(feedbackSample, 6));
+                        DBG("Input after feedback: " + juce::String(inputSample, 6));
+                        DBG("Delay time: " + juce::String(currentDelayTimeMs) + " ms");
+                        DBG("Feedback amount: " + juce::String(currentFeedbackAmount * 100.0f) + "%");
+                        DBG("Delay samples: " + juce::String(delaySamples));
+                    }
+                }
+
+                // Write input sample (with feedback) to circular buffer
+                inputBuf[static_cast<size_t>(inWritePos)] = inputSample;
                 inWritePos = (inWritePos + 1) % static_cast<int>(inputBuf.size());
 
                 // Check if we have enough samples for an FFT frame
@@ -922,9 +1090,61 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
                 }
 
                 // Read from output buffer
-                procOutput[static_cast<size_t>(i)] = outputBuf[static_cast<size_t>(outReadPos)];
+                float outputSample = outputBuf[static_cast<size_t>(outReadPos)];
                 outputBuf[static_cast<size_t>(outReadPos)] = 0.0f;  // Clear for next overlap-add
                 outReadPos = (outReadPos + 1) % static_cast<int>(outputBuf.size());
+
+                // Write processed output to time-domain feedback buffer (only once, on proc 0)
+                // This gets added to input on the next delay cycle, creating cascading pitch shifts
+                if (currentDelayEnabled && proc == 0)
+                {
+                    auto& fbBuffer = feedbackBuffers[static_cast<size_t>(channel)];
+                    int fbBufSize = static_cast<int>(fbBuffer.size());
+
+                    // === Feedback signal chain: HPF (80Hz) → LPF (DAMP) → Write ===
+
+                    // Step 1: Apply highpass filter (80Hz) to prevent low frequency buildup
+                    // Biquad Direct Form I: y[n] = b0*x[n] + b1*x[n-1] + b2*x[n-2] - a1*y[n-1] - a2*y[n-2]
+                    auto& hpfState = feedbackHpfState[static_cast<size_t>(channel)];
+                    float x0 = outputSample;
+                    float x1 = hpfState[0];
+                    float x2 = hpfState[1];
+                    float y1 = hpfState[2];
+                    float y2 = hpfState[3];
+
+                    float hpfOutput = feedbackHpfCoeffs[0] * x0
+                                    + feedbackHpfCoeffs[1] * x1
+                                    + feedbackHpfCoeffs[2] * x2
+                                    + feedbackHpfCoeffs[3] * y1  // Note: coeffs already negated
+                                    + feedbackHpfCoeffs[4] * y2;
+
+                    // Update HPF state
+                    hpfState[1] = x1;  // x[n-2] = x[n-1]
+                    hpfState[0] = x0;  // x[n-1] = x[n]
+                    hpfState[3] = y1;  // y[n-2] = y[n-1]
+                    hpfState[2] = hpfOutput;  // y[n-1] = y[n]
+
+                    // Step 2: Apply damping filter (one-pole lowpass) to feedback
+                    float& lpfState = feedbackFilterState[static_cast<size_t>(channel)];
+                    lpfState = hpfOutput + feedbackFilterCoeff * (lpfState - hpfOutput);
+                    float filteredSample = lpfState;
+
+                    // Write to feedback buffer
+                    fbBuffer[static_cast<size_t>(feedbackWritePos[static_cast<size_t>(channel)])] = filteredSample;
+                    feedbackWritePos[static_cast<size_t>(channel)] = (feedbackWritePos[static_cast<size_t>(channel)] + 1) % fbBufSize;
+
+                    // DEBUG: Log output being written to feedback buffer (once per second)
+                    static int fbWriteDebugCounter = 0;
+                    if (channel == 0 && ++fbWriteDebugCounter % static_cast<int>(currentSampleRate) == 0)
+                    {
+                        DBG("--- Feedback Write ---");
+                        DBG("Output sample (raw): " + juce::String(outputSample, 6));
+                        DBG("After HPF: " + juce::String(hpfOutput, 6));
+                        DBG("After LPF (written to buffer): " + juce::String(filteredSample, 6));
+                    }
+                }
+
+                procOutput[static_cast<size_t>(i)] = outputSample;
             }
         }
 
