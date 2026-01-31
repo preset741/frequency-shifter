@@ -243,6 +243,9 @@ private:
     juce::Label delayMixLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> delayMixAttachment;
 
+    // Stereo decorrelation toggle (testing feature)
+    juce::ToggleButton stereoDecorrelateToggle;
+
     // UI colors (for easy customization)
     struct Colors
     {

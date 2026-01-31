@@ -744,6 +744,15 @@ FrequencyShifterEditor::FrequencyShifterEditor(FrequencyShifterProcessor& p)
     setupLabel(delayMixLabel, "MIX");
     addAndMakeVisible(delayMixLabel);
 
+    // Stereo decorrelation toggle (testing feature)
+    // Applies 0.06ms delay to left channel to reduce phase-locked resonance
+    stereoDecorrelateToggle.setButtonText("L/R Decorr");
+    stereoDecorrelateToggle.setColour(juce::ToggleButton::textColourId, juce::Colour(Colors::textDim));
+    stereoDecorrelateToggle.onClick = [this]() {
+        audioProcessor.setStereoDecorrelate(stereoDecorrelateToggle.getToggleState());
+    };
+    addAndMakeVisible(stereoDecorrelateToggle);
+
     // Setup spectrum analyzer toggle
     spectrumButton.setButtonText("Spectrum");
     spectrumButton.setColour(juce::ToggleButton::textColourId, juce::Colour(Colors::text));
@@ -945,6 +954,9 @@ void FrequencyShifterEditor::resized()
 
     delayMixLabel.setBounds(470, 632, 30, 20);
     delayMixSlider.setBounds(500, 630, 110, 24);
+
+    // Stereo decorrelation toggle (bottom right corner - testing feature)
+    stereoDecorrelateToggle.setBounds(520, 655, 110, 20);
 
     // Spectrum analyzer (below main controls when visible)
     if (spectrumAnalyzer && spectrumVisible)

@@ -782,6 +782,12 @@ void FrequencyShifterProcessor::reinitializeDsp()
         }
     }
 
+    // Initialize stereo decorrelation buffer (0.06ms delay for left channel)
+    // This reduces phase-locked resonance between L/R channels
+    decorrelateDelaySamples = static_cast<int>(0.00006f * currentSampleRate + 0.5f);
+    leftDecorrelateBuffer.resize(static_cast<size_t>(decorrelateDelaySamples + 4), 0.0f);
+    decorrelateWritePos = 0;
+
     // Always report fixed latency of MAX_FFT_SIZE samples to host
     setLatencySamples(MAX_FFT_SIZE);
     needsReinit.store(false);
@@ -1265,6 +1271,28 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
 
             // Mix delayed dry with (possibly corrected) wet
             channelData[i] = delayedDrySample * (1.0f - currentDryWet) + wetSample * currentDryWet;
+        }
+    }
+
+    // Apply stereo decorrelation if enabled (0.06ms delay on left channel only)
+    // This reduces phase-locked resonance artifacts between L/R channels
+    if (stereoDecorrelateEnabled.load() && numChannels >= 2 && decorrelateDelaySamples > 0)
+    {
+        auto* leftChannel = buffer.getWritePointer(0);
+        int bufSize = static_cast<int>(leftDecorrelateBuffer.size());
+
+        for (int i = 0; i < numSamples; ++i)
+        {
+            // Read delayed sample from buffer
+            int readPos = (decorrelateWritePos - decorrelateDelaySamples + bufSize) % bufSize;
+            float delayedSample = leftDecorrelateBuffer[static_cast<size_t>(readPos)];
+
+            // Write current sample to buffer
+            leftDecorrelateBuffer[static_cast<size_t>(decorrelateWritePos)] = leftChannel[i];
+            decorrelateWritePos = (decorrelateWritePos + 1) % bufSize;
+
+            // Output delayed sample
+            leftChannel[i] = delayedSample;
         }
     }
 }

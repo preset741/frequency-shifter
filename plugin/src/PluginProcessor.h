@@ -117,6 +117,10 @@ public:
     const fshift::SpectralMask& getSpectralMask() const { return spectralMask; }
     bool isMaskEnabled() const { return maskEnabled.load(); }
 
+    // Stereo decorrelation control (testing feature)
+    void setStereoDecorrelate(bool enabled) { stereoDecorrelateEnabled.store(enabled); }
+    bool getStereoDecorrelate() const { return stereoDecorrelateEnabled.load(); }
+
 private:
     // Create parameter layout
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
@@ -177,6 +181,13 @@ private:
     std::atomic<float> preserveAmount{ 0.0f };     // 0.0 - 1.0
     std::atomic<float> transientAmount{ 0.0f };    // 0.0 - 1.0
     std::atomic<float> transientSensitivity{ 0.5f }; // 0.0 - 1.0 (default 50%)
+
+    // Stereo decorrelation (testing feature)
+    // Applies 0.06ms delay to left channel to reduce phase-locked resonance
+    std::atomic<bool> stereoDecorrelateEnabled{ false };
+    std::vector<float> leftDecorrelateBuffer;
+    int decorrelateWritePos = 0;
+    int decorrelateDelaySamples = 0;
 
     // Phase 2B+ Amplitude envelope tracking state (per channel)
     // For matching output amplitude dynamics to input dynamics
