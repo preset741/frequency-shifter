@@ -22,6 +22,11 @@ FrequencyShifterProcessor::FrequencyShifterProcessor()
     parameters.addParameterListener(PARAM_LFO_SYNC, this);
     parameters.addParameterListener(PARAM_LFO_DIVISION, this);
     parameters.addParameterListener(PARAM_LFO_SHAPE, this);
+    parameters.addParameterListener(PARAM_DLY_LFO_DEPTH, this);
+    parameters.addParameterListener(PARAM_DLY_LFO_RATE, this);
+    parameters.addParameterListener(PARAM_DLY_LFO_SYNC, this);
+    parameters.addParameterListener(PARAM_DLY_LFO_DIVISION, this);
+    parameters.addParameterListener(PARAM_DLY_LFO_SHAPE, this);
     parameters.addParameterListener(PARAM_MASK_ENABLED, this);
     parameters.addParameterListener(PARAM_MASK_MODE, this);
     parameters.addParameterListener(PARAM_MASK_LOW_FREQ, this);
@@ -60,6 +65,11 @@ FrequencyShifterProcessor::~FrequencyShifterProcessor()
     parameters.removeParameterListener(PARAM_LFO_SYNC, this);
     parameters.removeParameterListener(PARAM_LFO_DIVISION, this);
     parameters.removeParameterListener(PARAM_LFO_SHAPE, this);
+    parameters.removeParameterListener(PARAM_DLY_LFO_DEPTH, this);
+    parameters.removeParameterListener(PARAM_DLY_LFO_RATE, this);
+    parameters.removeParameterListener(PARAM_DLY_LFO_SYNC, this);
+    parameters.removeParameterListener(PARAM_DLY_LFO_DIVISION, this);
+    parameters.removeParameterListener(PARAM_DLY_LFO_SHAPE, this);
     parameters.removeParameterListener(PARAM_MASK_ENABLED, this);
     parameters.removeParameterListener(PARAM_MASK_MODE, this);
     parameters.removeParameterListener(PARAM_MASK_LOW_FREQ, this);
@@ -215,6 +225,51 @@ juce::AudioProcessorValueTreeState::ParameterLayout FrequencyShifterProcessor::c
     params.push_back(std::make_unique<juce::AudioParameterChoice>(
         juce::ParameterID{ PARAM_LFO_SHAPE, 1 },
         "LFO Shape",
+        juce::StringArray{ "Sine", "Triangle", "Saw", "Inv Saw", "Random" },
+        0));  // Default to Sine
+
+    // === Delay Time LFO Parameters ===
+
+    // Delay LFO depth (0-1000 ms)
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID{ PARAM_DLY_LFO_DEPTH, 1 },
+        "Delay LFO Depth",
+        juce::NormalisableRange<float>(0.0f, 1000.0f, 1.0f),
+        0.0f,
+        juce::AudioParameterFloatAttributes().withLabel("ms")));
+
+    // Delay LFO rate (0.01-20 Hz, log scale)
+    auto dlyLfoRateRange = juce::NormalisableRange<float>(0.01f, 20.0f,
+        [](float start, float end, float normalised) {
+            return start * std::pow(end / start, normalised);
+        },
+        [](float start, float end, float value) {
+            return std::log(value / start) / std::log(end / start);
+        });
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID{ PARAM_DLY_LFO_RATE, 1 },
+        "Delay LFO Rate",
+        dlyLfoRateRange,
+        1.0f,
+        juce::AudioParameterFloatAttributes().withLabel("Hz")));
+
+    // Delay LFO tempo sync toggle
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID{ PARAM_DLY_LFO_SYNC, 1 },
+        "Delay LFO Sync",
+        false));
+
+    // Delay LFO tempo division (when synced) - reuse same divisions as frequency LFO
+    params.push_back(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID{ PARAM_DLY_LFO_DIVISION, 1 },
+        "Delay LFO Division",
+        lfoDivisionNames,
+        4));  // Default to 1/4
+
+    // Delay LFO shape
+    params.push_back(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID{ PARAM_DLY_LFO_SHAPE, 1 },
+        "Delay LFO Shape",
         juce::StringArray{ "Sine", "Triangle", "Saw", "Inv Saw", "Random" },
         0));  // Default to Sine
 
@@ -461,6 +516,26 @@ void FrequencyShifterProcessor::parameterChanged(const juce::String& parameterID
     else if (parameterID == PARAM_LFO_SHAPE)
     {
         lfoShape.store(static_cast<int>(newValue));
+    }
+    else if (parameterID == PARAM_DLY_LFO_DEPTH)
+    {
+        dlyLfoDepth.store(newValue);
+    }
+    else if (parameterID == PARAM_DLY_LFO_RATE)
+    {
+        dlyLfoRate.store(newValue);
+    }
+    else if (parameterID == PARAM_DLY_LFO_SYNC)
+    {
+        dlyLfoSync.store(newValue > 0.5f);
+    }
+    else if (parameterID == PARAM_DLY_LFO_DIVISION)
+    {
+        dlyLfoDivision.store(static_cast<int>(newValue));
+    }
+    else if (parameterID == PARAM_DLY_LFO_SHAPE)
+    {
+        dlyLfoShape.store(static_cast<int>(newValue));
     }
     else if (parameterID == PARAM_MASK_ENABLED)
     {
@@ -980,6 +1055,87 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
     // Final modulated shift value
     const float currentShiftHz = baseShiftHz + lfoModulationHz;
 
+    // === Delay Time LFO Calculation ===
+    // Independent LFO that modulates delay time for dub/tape wobble effects
+    float dlyLfoModulationMs = 0.0f;
+    const float currentDlyLfoDepth = dlyLfoDepth.load();
+    const float currentDlyLfoRate = dlyLfoRate.load();
+    const bool currentDlyLfoSync = dlyLfoSync.load();
+    const int currentDlyLfoDivision = dlyLfoDivision.load();
+    const int currentDlyLfoShape = dlyLfoShape.load();
+
+    if (currentDlyLfoDepth > 0.01f)
+    {
+        // Calculate LFO frequency
+        double dlyLfoFreqHz;
+        if (currentDlyLfoSync && currentDlyLfoDivision >= 0 && currentDlyLfoDivision < NUM_LFO_DIVISIONS)
+        {
+            // Tempo synced: calculate from BPM and division
+            double beatsPerCycle = LFO_DIVISION_BEATS[currentDlyLfoDivision];
+            double secondsPerBeat = 60.0 / currentBpm;
+            double secondsPerCycle = beatsPerCycle * secondsPerBeat;
+            dlyLfoFreqHz = 1.0 / secondsPerCycle;
+        }
+        else
+        {
+            // Free running: use RATE parameter directly
+            dlyLfoFreqHz = static_cast<double>(currentDlyLfoRate);
+        }
+
+        // Advance delay LFO phase for this block
+        double dlyPhaseIncrement = (dlyLfoFreqHz * numSamples) / currentSampleRate;
+
+        // Latency compensation for tempo sync
+        double dlyLatencyCompensationPhase = 0.0;
+        if (currentDlyLfoSync)
+        {
+            int fftLatencySamples = currentFftSizes[0];
+            dlyLatencyCompensationPhase = (static_cast<double>(fftLatencySamples) / currentSampleRate) * dlyLfoFreqHz;
+        }
+
+        // Calculate current phase with latency compensation
+        double currentDlyPhase = dlyLfoPhase + dlyLatencyCompensationPhase;
+        currentDlyPhase = currentDlyPhase - std::floor(currentDlyPhase);  // Wrap to 0-1
+
+        // Generate LFO value based on shape (bipolar: -1 to +1)
+        float dlyLfoValue = 0.0f;
+        switch (currentDlyLfoShape)
+        {
+            case 0:  // Sine
+                dlyLfoValue = std::sin(currentDlyPhase * 2.0 * juce::MathConstants<double>::pi);
+                break;
+            case 1:  // Triangle
+                dlyLfoValue = static_cast<float>(4.0 * std::abs(currentDlyPhase - 0.5) - 1.0);
+                break;
+            case 2:  // Saw (rising)
+                dlyLfoValue = static_cast<float>(2.0 * currentDlyPhase - 1.0);
+                break;
+            case 3:  // Inv Saw (falling)
+                dlyLfoValue = static_cast<float>(1.0 - 2.0 * currentDlyPhase);
+                break;
+            case 4:  // Random (Sample & Hold)
+                // Only update random value when phase wraps
+                if (dlyLfoPhase + dlyPhaseIncrement >= 1.0)
+                {
+                    dlyLastRandomValue = (static_cast<float>(std::rand()) / RAND_MAX) * 2.0f - 1.0f;
+                }
+                dlyLfoValue = dlyLastRandomValue;
+                break;
+            default:
+                dlyLfoValue = 0.0f;
+        }
+
+        // Apply depth (in ms)
+        dlyLfoModulationMs = dlyLfoValue * currentDlyLfoDepth;
+
+        // Advance phase for next block
+        dlyLfoPhase += dlyPhaseIncrement;
+        dlyLfoPhase = dlyLfoPhase - std::floor(dlyLfoPhase);  // Wrap to 0-1
+    }
+
+    // Apply delay time modulation and clamp to valid range (10ms - 2000ms)
+    const float modulatedDelayTimeMs = std::clamp(currentDelayTimeMs + dlyLfoModulationMs, 10.0f, 2000.0f);
+
     // Cache crossfade value
     const float crossfade = currentCrossfade;
     const bool singleProc = useSingleProcessor;
@@ -1039,7 +1195,7 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
                     // feedback is injected.
                     int currentFftLatencySamples = currentFftSizes[0];  // SMEAR-dependent latency
 
-                    int rawDelaySamples = static_cast<int>(currentDelayTimeMs * currentSampleRate / 1000.0f);
+                    int rawDelaySamples = static_cast<int>(modulatedDelayTimeMs * currentSampleRate / 1000.0f);
                     int delaySamples = rawDelaySamples - currentFftLatencySamples;
 
                     // Ensure minimum delay of ~10ms to prevent artifacts
@@ -1072,7 +1228,7 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
                         DBG("=== Delay Feedback Debug ===");
                         DBG("Feedback sample: " + juce::String(feedbackSample, 6));
                         DBG("Input after feedback: " + juce::String(inputSample, 6));
-                        DBG("Requested delay: " + juce::String(currentDelayTimeMs) + " ms");
+                        DBG("Requested delay: " + juce::String(modulatedDelayTimeMs) + " ms (base: " + juce::String(currentDelayTimeMs) + " ms)");
                         DBG("FFT latency compensation: " + juce::String(currentFftLatencySamples) + " samples ("
                             + juce::String(currentFftLatencySamples * 1000.0f / currentSampleRate, 1) + " ms)");
                         DBG("Raw delay samples: " + juce::String(rawDelaySamples));
@@ -1154,7 +1310,7 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
                         if (currentDelayEnabled)
                         {
                             // Update spectral delay with tempo-synced time (if sync enabled)
-                            spectralDelays[channel][proc].setDelayTime(currentDelayTimeMs);
+                            spectralDelays[channel][proc].setDelayTime(modulatedDelayTimeMs);
                             spectralDelays[channel][proc].process(magnitude, phase);
                         }
                     }

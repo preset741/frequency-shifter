@@ -176,6 +176,28 @@ private:
     // Helper to toggle between RATE slider and DIV dropdown based on SYNC state
     void updateLfoSyncUI();
 
+    // Delay Time LFO controls
+    juce::Slider dlyLfoDepthSlider;
+    juce::Label dlyLfoDepthLabel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> dlyLfoDepthAttachment;
+
+    juce::Slider dlyLfoRateSlider;
+    juce::Label dlyLfoRateLabel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> dlyLfoRateAttachment;
+
+    juce::ToggleButton dlyLfoSyncButton;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> dlyLfoSyncAttachment;
+
+    juce::ComboBox dlyLfoDivisionCombo;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> dlyLfoDivisionAttachment;
+
+    juce::ComboBox dlyLfoShapeCombo;
+    juce::Label dlyLfoShapeLabel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> dlyLfoShapeAttachment;
+
+    // Helper to toggle between RATE slider and DIV dropdown based on DLY SYNC state
+    void updateDlyLfoSyncUI();
+
     // Manual sync (SliderAttachment doesn't support custom ranges for log scale)
     void sliderValueChanged(juce::Slider* slider) override;
 

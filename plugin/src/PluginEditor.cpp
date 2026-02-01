@@ -592,6 +592,73 @@ FrequencyShifterEditor::FrequencyShifterEditor(FrequencyShifterProcessor& p)
     lfoSyncButton.onClick = [this]() { updateLfoSyncUI(); };
     updateLfoSyncUI();  // Initialize visibility
 
+    // === Delay Time LFO Controls ===
+
+    // DLY LFO Depth slider
+    setupSlider(dlyLfoDepthSlider, juce::Slider::LinearHorizontal);
+    dlyLfoDepthSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
+    dlyLfoDepthSlider.setNumDecimalPlacesToDisplay(0);
+    addAndMakeVisible(dlyLfoDepthSlider);
+    dlyLfoDepthAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_DLY_LFO_DEPTH, dlyLfoDepthSlider);
+
+    setupLabel(dlyLfoDepthLabel, "DLY DEPTH");
+    addAndMakeVisible(dlyLfoDepthLabel);
+
+    // DLY LFO Rate slider
+    setupSlider(dlyLfoRateSlider, juce::Slider::LinearHorizontal);
+    dlyLfoRateSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
+    dlyLfoRateSlider.setNumDecimalPlacesToDisplay(2);
+    addAndMakeVisible(dlyLfoRateSlider);
+    dlyLfoRateAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_DLY_LFO_RATE, dlyLfoRateSlider);
+
+    setupLabel(dlyLfoRateLabel, "DLY RATE");
+    addAndMakeVisible(dlyLfoRateLabel);
+
+    // DLY LFO Sync toggle
+    dlyLfoSyncButton.setButtonText("SYNC");
+    dlyLfoSyncButton.setColour(juce::ToggleButton::textColourId, juce::Colour(Colors::text));
+    addAndMakeVisible(dlyLfoSyncButton);
+    dlyLfoSyncAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_DLY_LFO_SYNC, dlyLfoSyncButton);
+
+    // DLY LFO Division combo (when synced)
+    dlyLfoDivisionCombo.addItem("4/1", 1);
+    dlyLfoDivisionCombo.addItem("2/1", 2);
+    dlyLfoDivisionCombo.addItem("1/1", 3);
+    dlyLfoDivisionCombo.addItem("1/2", 4);
+    dlyLfoDivisionCombo.addItem("1/4", 5);
+    dlyLfoDivisionCombo.addItem("1/8", 6);
+    dlyLfoDivisionCombo.addItem("1/16", 7);
+    dlyLfoDivisionCombo.addItem("1/32", 8);
+    dlyLfoDivisionCombo.addItem("1/4T", 9);
+    dlyLfoDivisionCombo.addItem("1/8T", 10);
+    dlyLfoDivisionCombo.addItem("1/16T", 11);
+    dlyLfoDivisionCombo.addItem("1/4.", 12);
+    dlyLfoDivisionCombo.addItem("1/8.", 13);
+    dlyLfoDivisionCombo.addItem("1/16.", 14);
+    addAndMakeVisible(dlyLfoDivisionCombo);
+    dlyLfoDivisionAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_DLY_LFO_DIVISION, dlyLfoDivisionCombo);
+
+    // DLY LFO Shape combo
+    dlyLfoShapeCombo.addItem("Sine", 1);
+    dlyLfoShapeCombo.addItem("Triangle", 2);
+    dlyLfoShapeCombo.addItem("Saw", 3);
+    dlyLfoShapeCombo.addItem("Inv Saw", 4);
+    dlyLfoShapeCombo.addItem("Random", 5);
+    addAndMakeVisible(dlyLfoShapeCombo);
+    dlyLfoShapeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_DLY_LFO_SHAPE, dlyLfoShapeCombo);
+
+    setupLabel(dlyLfoShapeLabel, "DLY SHAPE");
+    addAndMakeVisible(dlyLfoShapeLabel);
+
+    // Set up sync button callback to toggle between RATE slider and DIV dropdown
+    dlyLfoSyncButton.onClick = [this]() { updateDlyLfoSyncUI(); };
+    updateDlyLfoSyncUI();  // Initialize visibility
+
     // === Spectral Mask Controls ===
 
     // Mask enabled toggle
@@ -777,14 +844,14 @@ FrequencyShifterEditor::FrequencyShifterEditor(FrequencyShifterProcessor& p)
 
         // Resize window when spectrum is toggled
         if (spectrumVisible)
-            setSize(640, 830);
+            setSize(640, 900);
         else
-            setSize(640, 670);
+            setSize(640, 740);
     };
     addAndMakeVisible(spectrumButton);
 
-    // Set editor size (increased by 60 to accommodate Phase 2B controls)
-    setSize(640, 670);
+    // Set editor size (increased for delay time LFO controls)
+    setSize(640, 740);
 
     // Initialize delay sync UI state
     updateDelaySyncUI();
@@ -915,56 +982,70 @@ void FrequencyShifterEditor::resized()
     lfoShapeLabel.setBounds(40, 425, 50, 20);
     lfoShapeCombo.setBounds(90, 423, 100, 24);
 
-    // Mask controls - row 1: toggle, mode, transition (shifted down by 60)
-    maskEnabledButton.setBounds(30, 510, 60, 24);
+    // Delay LFO controls - bottom panel row 4
+    dlyLfoDepthLabel.setBounds(40, 460, 70, 20);
+    dlyLfoDepthSlider.setBounds(110, 458, 130, 24);
 
-    maskModeLabel.setBounds(100, 512, 45, 20);
-    maskModeCombo.setBounds(145, 510, 100, 24);
+    dlyLfoRateLabel.setBounds(255, 460, 60, 20);
+    dlyLfoRateSlider.setBounds(315, 458, 100, 24);
 
-    maskTransitionLabel.setBounds(260, 512, 45, 20);
-    maskTransitionSlider.setBounds(305, 510, 120, 24);
+    dlyLfoSyncButton.setBounds(425, 458, 60, 24);
+    dlyLfoDivisionCombo.setBounds(485, 458, 70, 24);
+
+    // Delay LFO controls - bottom panel row 5
+    dlyLfoShapeLabel.setBounds(40, 495, 70, 20);
+    dlyLfoShapeCombo.setBounds(110, 493, 100, 24);
+
+    // Mask controls - row 1: toggle, mode, transition
+    maskEnabledButton.setBounds(30, 545, 60, 24);
+
+    maskModeLabel.setBounds(100, 547, 45, 20);
+    maskModeCombo.setBounds(145, 545, 100, 24);
+
+    maskTransitionLabel.setBounds(260, 547, 45, 20);
+    maskTransitionSlider.setBounds(305, 545, 120, 24);
 
     // Mask controls - row 2: low and high frequency (wider sliders)
-    maskLowFreqLabel.setBounds(30, 547, 35, 20);
-    maskLowFreqSlider.setBounds(65, 545, 250, 24);
+    maskLowFreqLabel.setBounds(30, 582, 35, 20);
+    maskLowFreqSlider.setBounds(65, 580, 250, 24);
 
-    maskHighFreqLabel.setBounds(330, 547, 40, 20);
-    maskHighFreqSlider.setBounds(370, 545, 240, 24);
+    maskHighFreqLabel.setBounds(330, 582, 40, 20);
+    maskHighFreqSlider.setBounds(370, 580, 240, 24);
 
     // Delay controls - row 1: toggle, time, sync, division, slope
-    delayEnabledButton.setBounds(30, 600, 60, 24);
+    delayEnabledButton.setBounds(30, 635, 60, 24);
 
-    delayTimeLabel.setBounds(95, 602, 35, 20);
-    delayTimeSlider.setBounds(130, 600, 120, 24);
+    delayTimeLabel.setBounds(95, 637, 35, 20);
+    delayTimeSlider.setBounds(130, 635, 120, 24);
 
-    delaySyncButton.setBounds(255, 600, 55, 24);
+    delaySyncButton.setBounds(255, 635, 55, 24);
 
-    delayDivisionLabel.setBounds(310, 602, 25, 20);
-    delayDivisionCombo.setBounds(335, 600, 70, 24);
+    delayDivisionLabel.setBounds(310, 637, 25, 20);
+    delayDivisionCombo.setBounds(335, 635, 70, 24);
 
-    delaySlopeLabel.setBounds(415, 602, 45, 20);
-    delaySlopeSlider.setBounds(460, 600, 150, 24);
+    delaySlopeLabel.setBounds(415, 637, 45, 20);
+    delaySlopeSlider.setBounds(460, 635, 150, 24);
 
     // Delay controls - row 2: feedback, damping, diffuse, mix
-    delayFeedbackLabel.setBounds(30, 632, 35, 20);
-    delayFeedbackSlider.setBounds(65, 630, 100, 24);
+    delayFeedbackLabel.setBounds(30, 667, 35, 20);
+    delayFeedbackSlider.setBounds(65, 665, 100, 24);
 
-    delayDampingLabel.setBounds(175, 632, 40, 20);
-    delayDampingSlider.setBounds(215, 630, 90, 24);
+    delayDampingLabel.setBounds(175, 667, 40, 20);
+    delayDampingSlider.setBounds(215, 665, 90, 24);
 
-    delayDiffuseLabel.setBounds(315, 632, 55, 20);
-    delayDiffuseSlider.setBounds(370, 630, 90, 24);
+    delayDiffuseLabel.setBounds(315, 667, 55, 20);
+    delayDiffuseSlider.setBounds(370, 665, 90, 24);
 
-    delayMixLabel.setBounds(470, 632, 30, 20);
-    delayMixSlider.setBounds(500, 630, 110, 24);
+    delayMixLabel.setBounds(470, 667, 30, 20);
+    delayMixSlider.setBounds(500, 665, 110, 24);
 
     // Stereo decorrelation toggle (bottom right corner - testing feature)
-    stereoDecorrelateToggle.setBounds(520, 655, 110, 20);
+    stereoDecorrelateToggle.setBounds(520, 690, 110, 20);
 
     // Spectrum analyzer (below main controls when visible)
     if (spectrumAnalyzer && spectrumVisible)
     {
-        spectrumAnalyzer->setBounds(20, 675, 600, 145);
+        spectrumAnalyzer->setBounds(20, 715, 600, 145);
     }
 }
 
@@ -1012,5 +1093,19 @@ void FrequencyShifterEditor::updateLfoSyncUI()
 
     lfoDivisionCombo.setEnabled(syncEnabled);
     lfoDivisionCombo.setAlpha(syncEnabled ? 1.0f : 0.4f);
+}
+
+void FrequencyShifterEditor::updateDlyLfoSyncUI()
+{
+    bool syncEnabled = dlyLfoSyncButton.getToggleState();
+
+    // When SYNC is ON: disable RATE slider, enable DIV dropdown
+    // When SYNC is OFF: enable RATE slider, disable DIV dropdown
+    dlyLfoRateSlider.setEnabled(!syncEnabled);
+    dlyLfoRateSlider.setAlpha(syncEnabled ? 0.4f : 1.0f);
+    dlyLfoRateLabel.setAlpha(syncEnabled ? 0.4f : 1.0f);
+
+    dlyLfoDivisionCombo.setEnabled(syncEnabled);
+    dlyLfoDivisionCombo.setAlpha(syncEnabled ? 1.0f : 0.4f);
 }
 

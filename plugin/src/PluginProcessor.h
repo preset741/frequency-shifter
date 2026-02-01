@@ -77,6 +77,13 @@ public:
     static constexpr const char* PARAM_LFO_DIVISION = "lfoDivision";
     static constexpr const char* PARAM_LFO_SHAPE = "lfoShape";
 
+    // Delay Time LFO parameters (modulates delay time for dub/tape wobble effects)
+    static constexpr const char* PARAM_DLY_LFO_DEPTH = "dlyLfoDepth";
+    static constexpr const char* PARAM_DLY_LFO_RATE = "dlyLfoRate";
+    static constexpr const char* PARAM_DLY_LFO_SYNC = "dlyLfoSync";
+    static constexpr const char* PARAM_DLY_LFO_DIVISION = "dlyLfoDivision";
+    static constexpr const char* PARAM_DLY_LFO_SHAPE = "dlyLfoShape";
+
     static constexpr const char* PARAM_MASK_ENABLED = "maskEnabled";
     static constexpr const char* PARAM_MASK_MODE = "maskMode";
     static constexpr const char* PARAM_MASK_LOW_FREQ = "maskLowFreq";
@@ -185,6 +192,17 @@ private:
     // LFO phase (0-1)
     double lfoPhase = 0.0;
     float lastRandomValue = 0.0f;  // For Random shape S&H
+
+    // Delay Time LFO state (independent from frequency LFO)
+    std::atomic<float> dlyLfoDepth{ 0.0f };    // 0-1000 ms
+    std::atomic<float> dlyLfoRate{ 1.0f };     // 0.01-20 Hz when not synced
+    std::atomic<bool> dlyLfoSync{ false };     // Tempo sync on/off
+    std::atomic<int> dlyLfoDivision{ 4 };      // Tempo division index (default 1/4)
+    std::atomic<int> dlyLfoShape{ 0 };         // 0=Sine, 1=Tri, 2=Saw, 3=InvSaw, 4=Random
+
+    // Delay LFO phase (0-1) - independent from frequency LFO
+    double dlyLfoPhase = 0.0;
+    float dlyLastRandomValue = 0.0f;  // For Random shape S&H
 
     std::atomic<bool> maskEnabled{ false };
     std::atomic<int> maskMode{ 2 };  // 0 = LowPass, 1 = HighPass, 2 = BandPass
