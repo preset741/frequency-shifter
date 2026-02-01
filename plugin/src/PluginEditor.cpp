@@ -518,71 +518,79 @@ FrequencyShifterEditor::FrequencyShifterEditor(FrequencyShifterProcessor& p)
     setupLabel(smearLabel, "SMEAR");
     addAndMakeVisible(smearLabel);
 
-    // Setup drift amount slider
-    setupSlider(driftAmountSlider, juce::Slider::LinearHorizontal);
-    driftAmountSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
-    driftAmountSlider.setNumDecimalPlacesToDisplay(1);
-    addAndMakeVisible(driftAmountSlider);
-    driftAmountAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
-        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_DRIFT_AMOUNT, driftAmountSlider);
+    // === LFO Modulation Controls ===
 
-    setupLabel(driftAmountLabel, "DRIFT");
-    addAndMakeVisible(driftAmountLabel);
+    // LFO Depth slider
+    setupSlider(lfoDepthSlider, juce::Slider::LinearHorizontal);
+    lfoDepthSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
+    lfoDepthSlider.setNumDecimalPlacesToDisplay(0);
+    addAndMakeVisible(lfoDepthSlider);
+    lfoDepthAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_LFO_DEPTH, lfoDepthSlider);
 
-    // Setup drift rate slider
-    setupSlider(driftRateSlider, juce::Slider::LinearHorizontal);
-    driftRateSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
-    driftRateSlider.setNumDecimalPlacesToDisplay(2);  // Rate needs 2 decimals (e.g., 0.10 Hz)
-    addAndMakeVisible(driftRateSlider);
-    driftRateAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
-        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_DRIFT_RATE, driftRateSlider);
+    setupLabel(lfoDepthLabel, "DEPTH");
+    addAndMakeVisible(lfoDepthLabel);
 
-    setupLabel(driftRateLabel, "RATE");
-    addAndMakeVisible(driftRateLabel);
+    // LFO Depth Mode combo (Hz/Deg)
+    lfoDepthModeCombo.addItem("Hz", 1);
+    lfoDepthModeCombo.addItem("Deg", 2);
+    addAndMakeVisible(lfoDepthModeCombo);
+    lfoDepthModeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_LFO_DEPTH_MODE, lfoDepthModeCombo);
 
-    // Setup drift mode combo
-    driftModeCombo.addItem("LFO", 1);
-    driftModeCombo.addItem("Perlin", 2);
-    driftModeCombo.addItem("Stochastic", 3);
-    addAndMakeVisible(driftModeCombo);
-    driftModeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
-        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_DRIFT_MODE, driftModeCombo);
+    // LFO Rate slider
+    setupSlider(lfoRateSlider, juce::Slider::LinearHorizontal);
+    lfoRateSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
+    lfoRateSlider.setNumDecimalPlacesToDisplay(2);
+    addAndMakeVisible(lfoRateSlider);
+    lfoRateAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_LFO_RATE, lfoRateSlider);
 
-    setupLabel(driftModeLabel, "MODE");
-    addAndMakeVisible(driftModeLabel);
+    setupLabel(lfoRateLabel, "RATE");
+    addAndMakeVisible(lfoRateLabel);
 
-    // Setup stochastic type combo
-    stochasticTypeCombo.addItem("Poisson", 1);
-    stochasticTypeCombo.addItem("Random Walk", 2);
-    stochasticTypeCombo.addItem("Jump Diffusion", 3);
-    addAndMakeVisible(stochasticTypeCombo);
-    stochasticTypeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
-        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_STOCHASTIC_TYPE, stochasticTypeCombo);
+    // LFO Sync toggle
+    lfoSyncButton.setButtonText("SYNC");
+    lfoSyncButton.setColour(juce::ToggleButton::textColourId, juce::Colour(Colors::text));
+    addAndMakeVisible(lfoSyncButton);
+    lfoSyncAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_LFO_SYNC, lfoSyncButton);
 
-    setupLabel(stochasticTypeLabel, "TYPE");
-    addAndMakeVisible(stochasticTypeLabel);
+    // LFO Division combo (when synced)
+    lfoDivisionCombo.addItem("4/1", 1);
+    lfoDivisionCombo.addItem("2/1", 2);
+    lfoDivisionCombo.addItem("1/1", 3);
+    lfoDivisionCombo.addItem("1/2", 4);
+    lfoDivisionCombo.addItem("1/4", 5);
+    lfoDivisionCombo.addItem("1/8", 6);
+    lfoDivisionCombo.addItem("1/16", 7);
+    lfoDivisionCombo.addItem("1/32", 8);
+    lfoDivisionCombo.addItem("1/4T", 9);
+    lfoDivisionCombo.addItem("1/8T", 10);
+    lfoDivisionCombo.addItem("1/16T", 11);
+    lfoDivisionCombo.addItem("1/4.", 12);
+    lfoDivisionCombo.addItem("1/8.", 13);
+    lfoDivisionCombo.addItem("1/16.", 14);
+    addAndMakeVisible(lfoDivisionCombo);
+    lfoDivisionAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_LFO_DIVISION, lfoDivisionCombo);
 
-    // Setup stochastic density slider
-    setupSlider(stochasticDensitySlider, juce::Slider::LinearHorizontal);
-    stochasticDensitySlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
-    stochasticDensitySlider.setNumDecimalPlacesToDisplay(1);
-    addAndMakeVisible(stochasticDensitySlider);
-    stochasticDensityAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
-        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_STOCHASTIC_DENSITY, stochasticDensitySlider);
+    // LFO Shape combo
+    lfoShapeCombo.addItem("Sine", 1);
+    lfoShapeCombo.addItem("Triangle", 2);
+    lfoShapeCombo.addItem("Saw", 3);
+    lfoShapeCombo.addItem("Inv Saw", 4);
+    lfoShapeCombo.addItem("Random", 5);
+    addAndMakeVisible(lfoShapeCombo);
+    lfoShapeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_LFO_SHAPE, lfoShapeCombo);
 
-    setupLabel(stochasticDensityLabel, "DENSITY");
-    addAndMakeVisible(stochasticDensityLabel);
+    setupLabel(lfoShapeLabel, "SHAPE");
+    addAndMakeVisible(lfoShapeLabel);
 
-    // Setup stochastic smoothness slider
-    setupSlider(stochasticSmoothnessSlider, juce::Slider::LinearHorizontal);
-    stochasticSmoothnessSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
-    stochasticSmoothnessSlider.setNumDecimalPlacesToDisplay(1);
-    addAndMakeVisible(stochasticSmoothnessSlider);
-    stochasticSmoothnessAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
-        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_STOCHASTIC_SMOOTHNESS, stochasticSmoothnessSlider);
-
-    setupLabel(stochasticSmoothnessLabel, "SMOOTH");
-    addAndMakeVisible(stochasticSmoothnessLabel);
+    // Set up sync button callback to toggle between RATE slider and DIV dropdown
+    lfoSyncButton.onClick = [this]() { updateLfoSyncUI(); };
+    updateLfoSyncUI();  // Initialize visibility
 
     // === Spectral Mask Controls ===
 
@@ -892,25 +900,20 @@ void FrequencyShifterEditor::resized()
     dryWetSlider.setBounds(110, 353, 380, 24);
     spectrumButton.setBounds(510, 353, 100, 24);
 
-    // Drift controls - bottom panel row 2
-    driftAmountLabel.setBounds(40, 390, 50, 20);
-    driftAmountSlider.setBounds(90, 388, 160, 24);
+    // LFO controls - bottom panel row 2
+    lfoDepthLabel.setBounds(40, 390, 50, 20);
+    lfoDepthSlider.setBounds(90, 388, 130, 24);
+    lfoDepthModeCombo.setBounds(225, 388, 55, 24);
 
-    driftRateLabel.setBounds(265, 390, 40, 20);
-    driftRateSlider.setBounds(305, 388, 140, 24);
+    lfoRateLabel.setBounds(295, 390, 40, 20);
+    lfoRateSlider.setBounds(335, 388, 100, 24);
 
-    driftModeLabel.setBounds(460, 390, 45, 20);
-    driftModeCombo.setBounds(505, 388, 105, 24);
+    lfoSyncButton.setBounds(445, 388, 60, 24);
+    lfoDivisionCombo.setBounds(505, 388, 70, 24);
 
-    // Stochastic controls - bottom panel row 3
-    stochasticTypeLabel.setBounds(40, 425, 40, 20);
-    stochasticTypeCombo.setBounds(80, 423, 130, 24);
-
-    stochasticDensityLabel.setBounds(225, 425, 60, 20);
-    stochasticDensitySlider.setBounds(285, 423, 120, 24);
-
-    stochasticSmoothnessLabel.setBounds(420, 425, 60, 20);
-    stochasticSmoothnessSlider.setBounds(480, 423, 130, 24);
+    // LFO controls - bottom panel row 3
+    lfoShapeLabel.setBounds(40, 425, 50, 20);
+    lfoShapeCombo.setBounds(90, 423, 100, 24);
 
     // Mask controls - row 1: toggle, mode, transition (shifted down by 60)
     maskEnabledButton.setBounds(30, 510, 60, 24);
@@ -995,5 +998,19 @@ void FrequencyShifterEditor::updateDelaySyncUI()
     delayDivisionCombo.setEnabled(syncEnabled);
     delayDivisionCombo.setAlpha(syncEnabled ? 1.0f : 0.4f);
     delayDivisionLabel.setAlpha(syncEnabled ? 1.0f : 0.4f);
+}
+
+void FrequencyShifterEditor::updateLfoSyncUI()
+{
+    bool syncEnabled = lfoSyncButton.getToggleState();
+
+    // When SYNC is ON: disable RATE slider, enable DIV dropdown
+    // When SYNC is OFF: enable RATE slider, disable DIV dropdown
+    lfoRateSlider.setEnabled(!syncEnabled);
+    lfoRateSlider.setAlpha(syncEnabled ? 0.4f : 1.0f);
+    lfoRateLabel.setAlpha(syncEnabled ? 0.4f : 1.0f);
+
+    lfoDivisionCombo.setEnabled(syncEnabled);
+    lfoDivisionCombo.setAlpha(syncEnabled ? 1.0f : 0.4f);
 }
 

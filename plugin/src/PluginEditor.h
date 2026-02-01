@@ -151,31 +151,30 @@ private:
     juce::Label smearLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> smearAttachment;
 
-    // Drift controls (for organic/imperfect quantization)
-    juce::Slider driftAmountSlider;
-    juce::Label driftAmountLabel;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> driftAmountAttachment;
+    // LFO Modulation controls
+    juce::Slider lfoDepthSlider;
+    juce::Label lfoDepthLabel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> lfoDepthAttachment;
 
-    juce::Slider driftRateSlider;
-    juce::Label driftRateLabel;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> driftRateAttachment;
+    juce::ComboBox lfoDepthModeCombo;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> lfoDepthModeAttachment;
 
-    juce::ComboBox driftModeCombo;
-    juce::Label driftModeLabel;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> driftModeAttachment;
+    juce::Slider lfoRateSlider;
+    juce::Label lfoRateLabel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> lfoRateAttachment;
 
-    // Stochastic controls (only active when drift mode is Stochastic)
-    juce::ComboBox stochasticTypeCombo;
-    juce::Label stochasticTypeLabel;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> stochasticTypeAttachment;
+    juce::ToggleButton lfoSyncButton;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> lfoSyncAttachment;
 
-    juce::Slider stochasticDensitySlider;
-    juce::Label stochasticDensityLabel;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> stochasticDensityAttachment;
+    juce::ComboBox lfoDivisionCombo;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> lfoDivisionAttachment;
 
-    juce::Slider stochasticSmoothnessSlider;
-    juce::Label stochasticSmoothnessLabel;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> stochasticSmoothnessAttachment;
+    juce::ComboBox lfoShapeCombo;
+    juce::Label lfoShapeLabel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> lfoShapeAttachment;
+
+    // Helper to toggle between RATE slider and DIV dropdown based on SYNC state
+    void updateLfoSyncUI();
 
     // Manual sync (SliderAttachment doesn't support custom ranges for log scale)
     void sliderValueChanged(juce::Slider* slider) override;

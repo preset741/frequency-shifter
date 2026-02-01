@@ -5,7 +5,6 @@
 #include "dsp/PhaseVocoder.h"
 #include "dsp/FrequencyShifter.h"
 #include "dsp/MusicalQuantizer.h"
-#include "dsp/DriftModulator.h"
 #include "dsp/SpectralMask.h"
 #include "dsp/SpectralDelay.h"
 
@@ -69,12 +68,15 @@ public:
     static constexpr const char* PARAM_PHASE_VOCODER = "phaseVocoder";
     static constexpr const char* PARAM_SMEAR = "smear";  // 5-123ms continuous control
     static constexpr const char* PARAM_LOG_SCALE = "logScale";
-    static constexpr const char* PARAM_DRIFT_AMOUNT = "driftAmount";
-    static constexpr const char* PARAM_DRIFT_RATE = "driftRate";
-    static constexpr const char* PARAM_DRIFT_MODE = "driftMode";
-    static constexpr const char* PARAM_STOCHASTIC_TYPE = "stochasticType";
-    static constexpr const char* PARAM_STOCHASTIC_DENSITY = "stochasticDensity";
-    static constexpr const char* PARAM_STOCHASTIC_SMOOTHNESS = "stochasticSmoothness";
+
+    // LFO modulation parameters (modulates frequency shift amount)
+    static constexpr const char* PARAM_LFO_DEPTH = "lfoDepth";
+    static constexpr const char* PARAM_LFO_DEPTH_MODE = "lfoDepthMode";  // 0 = Hz, 1 = Degrees
+    static constexpr const char* PARAM_LFO_RATE = "lfoRate";
+    static constexpr const char* PARAM_LFO_SYNC = "lfoSync";
+    static constexpr const char* PARAM_LFO_DIVISION = "lfoDivision";
+    static constexpr const char* PARAM_LFO_SHAPE = "lfoShape";
+
     static constexpr const char* PARAM_MASK_ENABLED = "maskEnabled";
     static constexpr const char* PARAM_MASK_MODE = "maskMode";
     static constexpr const char* PARAM_MASK_LOW_FREQ = "maskLowFreq";
@@ -141,7 +143,6 @@ private:
     std::array<std::array<std::unique_ptr<fshift::PhaseVocoder>, NUM_PROCESSORS>, MAX_CHANNELS> phaseVocoders;
     std::array<std::array<std::unique_ptr<fshift::FrequencyShifter>, NUM_PROCESSORS>, MAX_CHANNELS> frequencyShifters;
     std::unique_ptr<fshift::MusicalQuantizer> quantizer;
-    fshift::DriftModulator driftModulator;
     fshift::SpectralMask spectralMask;
     std::array<std::array<fshift::SpectralDelay, NUM_PROCESSORS>, MAX_CHANNELS> spectralDelays;
 
@@ -153,12 +154,38 @@ private:
     std::atomic<int> rootNote{ 60 };  // C4
     std::atomic<int> scaleType{ 0 };  // Major
     std::atomic<float> smearMs{ 93.0f };  // Default to max quality (~93ms at 44.1kHz)
-    std::atomic<float> driftAmount{ 0.0f };
-    std::atomic<float> driftRate{ 1.0f };
-    std::atomic<int> driftMode{ 0 };  // 0 = LFO, 1 = Perlin, 2 = Stochastic
-    std::atomic<int> stochasticType{ 0 };  // 0 = Poisson, 1 = RandomWalk, 2 = JumpDiffusion
-    std::atomic<float> stochasticDensity{ 0.5f };
-    std::atomic<float> stochasticSmoothness{ 0.5f };
+
+    // LFO modulation state
+    std::atomic<float> lfoDepth{ 0.0f };      // 0-5000 Hz or degrees
+    std::atomic<int> lfoDepthMode{ 0 };       // 0 = Hz, 1 = Degrees
+    std::atomic<float> lfoRate{ 1.0f };       // 0.01-20 Hz when not synced
+    std::atomic<bool> lfoSync{ false };       // Tempo sync on/off
+    std::atomic<int> lfoDivision{ 4 };        // Tempo division index (default 1/4)
+    std::atomic<int> lfoShape{ 0 };           // 0=Sine, 1=Tri, 2=Saw, 3=InvSaw, 4=Random
+
+    // LFO tempo sync division multipliers (in beats, i.e. quarter notes)
+    static constexpr int NUM_LFO_DIVISIONS = 14;
+    static constexpr float LFO_DIVISION_BEATS[NUM_LFO_DIVISIONS] = {
+        16.0f,   // 4/1 (4 bars)
+        8.0f,    // 2/1 (2 bars)
+        4.0f,    // 1/1 (1 bar)
+        2.0f,    // 1/2
+        1.0f,    // 1/4
+        0.5f,    // 1/8
+        0.25f,   // 1/16
+        0.125f,  // 1/32
+        1.333f,  // 1/4T (triplet)
+        0.667f,  // 1/8T
+        0.333f,  // 1/16T
+        1.5f,    // 1/4. (dotted)
+        0.75f,   // 1/8.
+        0.375f   // 1/16.
+    };
+
+    // LFO phase (0-1)
+    double lfoPhase = 0.0;
+    float lastRandomValue = 0.0f;  // For Random shape S&H
+
     std::atomic<bool> maskEnabled{ false };
     std::atomic<int> maskMode{ 2 };  // 0 = LowPass, 1 = HighPass, 2 = BandPass
     std::atomic<float> maskLowFreq{ 200.0f };

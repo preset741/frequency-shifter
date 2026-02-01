@@ -16,12 +16,12 @@ FrequencyShifterProcessor::FrequencyShifterProcessor()
     parameters.addParameterListener(PARAM_DRY_WET, this);
     parameters.addParameterListener(PARAM_PHASE_VOCODER, this);
     parameters.addParameterListener(PARAM_SMEAR, this);
-    parameters.addParameterListener(PARAM_DRIFT_AMOUNT, this);
-    parameters.addParameterListener(PARAM_DRIFT_RATE, this);
-    parameters.addParameterListener(PARAM_DRIFT_MODE, this);
-    parameters.addParameterListener(PARAM_STOCHASTIC_TYPE, this);
-    parameters.addParameterListener(PARAM_STOCHASTIC_DENSITY, this);
-    parameters.addParameterListener(PARAM_STOCHASTIC_SMOOTHNESS, this);
+    parameters.addParameterListener(PARAM_LFO_DEPTH, this);
+    parameters.addParameterListener(PARAM_LFO_DEPTH_MODE, this);
+    parameters.addParameterListener(PARAM_LFO_RATE, this);
+    parameters.addParameterListener(PARAM_LFO_SYNC, this);
+    parameters.addParameterListener(PARAM_LFO_DIVISION, this);
+    parameters.addParameterListener(PARAM_LFO_SHAPE, this);
     parameters.addParameterListener(PARAM_MASK_ENABLED, this);
     parameters.addParameterListener(PARAM_MASK_MODE, this);
     parameters.addParameterListener(PARAM_MASK_LOW_FREQ, this);
@@ -54,12 +54,12 @@ FrequencyShifterProcessor::~FrequencyShifterProcessor()
     parameters.removeParameterListener(PARAM_DRY_WET, this);
     parameters.removeParameterListener(PARAM_PHASE_VOCODER, this);
     parameters.removeParameterListener(PARAM_SMEAR, this);
-    parameters.removeParameterListener(PARAM_DRIFT_AMOUNT, this);
-    parameters.removeParameterListener(PARAM_DRIFT_RATE, this);
-    parameters.removeParameterListener(PARAM_DRIFT_MODE, this);
-    parameters.removeParameterListener(PARAM_STOCHASTIC_TYPE, this);
-    parameters.removeParameterListener(PARAM_STOCHASTIC_DENSITY, this);
-    parameters.removeParameterListener(PARAM_STOCHASTIC_SMOOTHNESS, this);
+    parameters.removeParameterListener(PARAM_LFO_DEPTH, this);
+    parameters.removeParameterListener(PARAM_LFO_DEPTH_MODE, this);
+    parameters.removeParameterListener(PARAM_LFO_RATE, this);
+    parameters.removeParameterListener(PARAM_LFO_SYNC, this);
+    parameters.removeParameterListener(PARAM_LFO_DIVISION, this);
+    parameters.removeParameterListener(PARAM_LFO_SHAPE, this);
     parameters.removeParameterListener(PARAM_MASK_ENABLED, this);
     parameters.removeParameterListener(PARAM_MASK_MODE, this);
     parameters.removeParameterListener(PARAM_MASK_LOW_FREQ, this);
@@ -162,59 +162,61 @@ juce::AudioProcessorValueTreeState::ParameterLayout FrequencyShifterProcessor::c
         "Log Scale",
         false));  // Default to linear
 
-    // Drift amount (0-100%) - how much pitch drift to apply
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID{ PARAM_DRIFT_AMOUNT, 1 },
-        "Drift",
-        juce::NormalisableRange<float>(0.0f, 100.0f, 0.1f),
-        0.0f,
-        juce::AudioParameterFloatAttributes().withLabel("%")));
+    // === LFO Modulation Parameters ===
 
-    // Drift rate (0.1-10 Hz) - speed of pitch drift modulation
-    auto driftRateRange = juce::NormalisableRange<float>(0.1f, 10.0f,
+    // LFO depth (0-5000 Hz or scale degrees)
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID{ PARAM_LFO_DEPTH, 1 },
+        "LFO Depth",
+        juce::NormalisableRange<float>(0.0f, 5000.0f, 1.0f),
+        0.0f,
+        juce::AudioParameterFloatAttributes().withLabel("")));
+
+    // LFO depth mode (Hz or Degrees)
+    params.push_back(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID{ PARAM_LFO_DEPTH_MODE, 1 },
+        "Depth Mode",
+        juce::StringArray{ "Hz", "Deg" },
+        0));  // Default to Hz
+
+    // LFO rate (0.01-20 Hz, log scale)
+    auto lfoRateRange = juce::NormalisableRange<float>(0.01f, 20.0f,
         [](float start, float end, float normalised) {
-            // Log scale for rate
             return start * std::pow(end / start, normalised);
         },
         [](float start, float end, float value) {
             return std::log(value / start) / std::log(end / start);
         });
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID{ PARAM_DRIFT_RATE, 1 },
-        "Drift Rate",
-        driftRateRange,
+        juce::ParameterID{ PARAM_LFO_RATE, 1 },
+        "LFO Rate",
+        lfoRateRange,
         1.0f,
         juce::AudioParameterFloatAttributes().withLabel("Hz")));
 
-    // Drift mode (LFO, Perlin, or Stochastic)
+    // LFO tempo sync toggle
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID{ PARAM_LFO_SYNC, 1 },
+        "LFO Sync",
+        false));
+
+    // LFO tempo division (when synced)
+    juce::StringArray lfoDivisionNames{
+        "4/1", "2/1", "1/1", "1/2", "1/4", "1/8", "1/16", "1/32",
+        "1/4T", "1/8T", "1/16T", "1/4.", "1/8.", "1/16."
+    };
     params.push_back(std::make_unique<juce::AudioParameterChoice>(
-        juce::ParameterID{ PARAM_DRIFT_MODE, 1 },
-        "Drift Mode",
-        juce::StringArray{ "LFO", "Perlin", "Stochastic" },
-        0));  // Default to LFO
+        juce::ParameterID{ PARAM_LFO_DIVISION, 1 },
+        "LFO Division",
+        lfoDivisionNames,
+        4));  // Default to 1/4
 
-    // Stochastic type (Poisson, RandomWalk, JumpDiffusion)
+    // LFO shape
     params.push_back(std::make_unique<juce::AudioParameterChoice>(
-        juce::ParameterID{ PARAM_STOCHASTIC_TYPE, 1 },
-        "Stochastic Type",
-        juce::StringArray{ "Poisson", "Random Walk", "Jump Diffusion" },
-        0));  // Default to Poisson
-
-    // Stochastic density (0-100%) - how frequently events occur
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID{ PARAM_STOCHASTIC_DENSITY, 1 },
-        "Density",
-        juce::NormalisableRange<float>(0.0f, 100.0f, 0.1f),
-        50.0f,
-        juce::AudioParameterFloatAttributes().withLabel("%")));
-
-    // Stochastic smoothness (0-100%) - sharp pops to slow swells
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID{ PARAM_STOCHASTIC_SMOOTHNESS, 1 },
-        "Smoothness",
-        juce::NormalisableRange<float>(0.0f, 100.0f, 0.1f),
-        50.0f,
-        juce::AudioParameterFloatAttributes().withLabel("%")));
+        juce::ParameterID{ PARAM_LFO_SHAPE, 1 },
+        "LFO Shape",
+        juce::StringArray{ "Sine", "Triangle", "Saw", "Inv Saw", "Random" },
+        0));  // Default to Sine
 
     // === Spectral Mask Parameters ===
 
@@ -436,42 +438,29 @@ void FrequencyShifterProcessor::parameterChanged(const juce::String& parameterID
             needsReinit.store(true);
         }
     }
-    else if (parameterID == PARAM_DRIFT_AMOUNT)
+    else if (parameterID == PARAM_LFO_DEPTH)
     {
-        driftAmount.store(newValue / 100.0f);
-        driftModulator.setDepth(newValue / 100.0f);
+        lfoDepth.store(newValue);
     }
-    else if (parameterID == PARAM_DRIFT_RATE)
+    else if (parameterID == PARAM_LFO_DEPTH_MODE)
     {
-        driftRate.store(newValue);
-        driftModulator.setRate(newValue);
+        lfoDepthMode.store(static_cast<int>(newValue));
     }
-    else if (parameterID == PARAM_DRIFT_MODE)
+    else if (parameterID == PARAM_LFO_RATE)
     {
-        int mode = static_cast<int>(newValue);
-        driftMode.store(mode);
-        if (mode == 0)
-            driftModulator.setMode(fshift::DriftModulator::Mode::LFO);
-        else if (mode == 1)
-            driftModulator.setMode(fshift::DriftModulator::Mode::Perlin);
-        else
-            driftModulator.setMode(fshift::DriftModulator::Mode::Stochastic);
+        lfoRate.store(newValue);
     }
-    else if (parameterID == PARAM_STOCHASTIC_TYPE)
+    else if (parameterID == PARAM_LFO_SYNC)
     {
-        int type = static_cast<int>(newValue);
-        stochasticType.store(type);
-        driftModulator.setStochasticType(static_cast<fshift::DriftModulator::StochasticType>(type));
+        lfoSync.store(newValue > 0.5f);
     }
-    else if (parameterID == PARAM_STOCHASTIC_DENSITY)
+    else if (parameterID == PARAM_LFO_DIVISION)
     {
-        stochasticDensity.store(newValue / 100.0f);
-        driftModulator.setDensity(newValue / 100.0f);
+        lfoDivision.store(static_cast<int>(newValue));
     }
-    else if (parameterID == PARAM_STOCHASTIC_SMOOTHNESS)
+    else if (parameterID == PARAM_LFO_SHAPE)
     {
-        stochasticSmoothness.store(newValue / 100.0f);
-        driftModulator.setSmoothness(newValue / 100.0f);
+        lfoShape.store(static_cast<int>(newValue));
     }
     else if (parameterID == PARAM_MASK_ENABLED)
     {
@@ -717,9 +706,9 @@ void FrequencyShifterProcessor::reinitializeDsp()
         dryDelayWritePos[ch] = 0;
     }
 
-    // Prepare drift modulator with max FFT size for consistency
-    driftModulator.prepare(currentSampleRate, MAX_FFT_SIZE / 2);
-    driftModulator.reset();
+    // Reset LFO phase
+    lfoPhase = 0.0;
+    lastRandomValue = 0.0f;
 
     // Prepare quantizer with primary FFT settings for phase continuity (Phase 2A.3)
     if (quantizer)
@@ -845,12 +834,19 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
     const int numSamples = buffer.getNumSamples();
 
     // Get current parameter values
-    const float currentShiftHz = shiftHz.load();
+    const float baseShiftHz = shiftHz.load();
     const float currentQuantizeStrength = quantizeStrength.load();
     const float currentDryWet = dryWetMix.load();
     const bool currentUsePhaseVocoder = usePhaseVocoder.load();
-    const float currentDriftAmount = driftAmount.load();
     const bool currentMaskEnabled = maskEnabled.load();
+
+    // LFO modulation parameters
+    const float currentLfoDepth = lfoDepth.load();
+    const int currentLfoDepthMode = lfoDepthMode.load();
+    const float currentLfoRate = lfoRate.load();
+    const bool currentLfoSync = lfoSync.load();
+    const int currentLfoDivision = lfoDivision.load();
+    const int currentLfoShape = lfoShape.load();
     const bool currentDelayEnabled = delayEnabled.load();
     const bool currentDelaySync = delaySync.load();
     const int currentDelayDivision = delayDivision.load();
@@ -885,12 +881,111 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
         currentDelayTimeMs = delayTime.load();
     }
 
+    // === LFO Calculation ===
+    float lfoModulationHz = 0.0f;
+    if (currentLfoDepth > 0.01f)
+    {
+        // Calculate LFO frequency
+        double lfoFreqHz;
+        if (currentLfoSync && currentLfoDivision >= 0 && currentLfoDivision < NUM_LFO_DIVISIONS)
+        {
+            // Tempo synced: calculate from BPM and division
+            double beatsPerCycle = LFO_DIVISION_BEATS[currentLfoDivision];
+            double secondsPerBeat = 60.0 / currentBpm;
+            double secondsPerCycle = beatsPerCycle * secondsPerBeat;
+            lfoFreqHz = 1.0 / secondsPerCycle;
+        }
+        else
+        {
+            // Free running: use RATE parameter directly
+            lfoFreqHz = static_cast<double>(currentLfoRate);
+        }
+
+        // Advance LFO phase for this block
+        double phaseIncrement = (lfoFreqHz * numSamples) / currentSampleRate;
+
+        // Latency compensation for tempo sync
+        // Advance phase by FFT latency to stay in sync with audible output
+        double latencyCompensationPhase = 0.0;
+        if (currentLfoSync)
+        {
+            int fftLatencySamples = currentFftSizes[0];
+            latencyCompensationPhase = (static_cast<double>(fftLatencySamples) / currentSampleRate) * lfoFreqHz;
+        }
+
+        // Calculate current phase with latency compensation
+        double currentPhase = lfoPhase + latencyCompensationPhase;
+        currentPhase = currentPhase - std::floor(currentPhase);  // Wrap to 0-1
+
+        // Generate LFO value based on shape (bipolar: -1 to +1)
+        float lfoValue = 0.0f;
+        switch (currentLfoShape)
+        {
+            case 0:  // Sine
+                lfoValue = std::sin(currentPhase * 2.0 * juce::MathConstants<double>::pi);
+                break;
+            case 1:  // Triangle
+                lfoValue = static_cast<float>(4.0 * std::abs(currentPhase - 0.5) - 1.0);
+                break;
+            case 2:  // Saw (rising)
+                lfoValue = static_cast<float>(2.0 * currentPhase - 1.0);
+                break;
+            case 3:  // Inv Saw (falling)
+                lfoValue = static_cast<float>(1.0 - 2.0 * currentPhase);
+                break;
+            case 4:  // Random (Sample & Hold)
+                // Only update random value when phase wraps
+                if (lfoPhase + phaseIncrement >= 1.0)
+                {
+                    lastRandomValue = (static_cast<float>(std::rand()) / RAND_MAX) * 2.0f - 1.0f;
+                }
+                lfoValue = lastRandomValue;
+                break;
+            default:
+                lfoValue = 0.0f;
+        }
+
+        // Apply depth based on mode
+        if (currentLfoDepthMode == 0)
+        {
+            // Hz mode: depth is in Hz
+            lfoModulationHz = lfoValue * currentLfoDepth;
+        }
+        else
+        {
+            // Degrees mode: convert to Hz based on quantizer intervals
+            // 1 degree = 1 scale step, approximate as semitone ratio
+            // For now, use 100 cents per degree as approximation
+            if (currentQuantizeStrength > 0.01f && quantizer)
+            {
+                // Use quantizer to get Hz per degree
+                float baseFreq = 440.0f;  // Reference frequency
+                float centsPerDegree = 100.0f;  // 1 semitone per degree
+                float targetCents = lfoValue * currentLfoDepth * centsPerDegree;
+                float ratio = std::pow(2.0f, targetCents / 1200.0f);
+                lfoModulationHz = baseFreq * (ratio - 1.0f);
+            }
+            else
+            {
+                // Fall back to Hz mode when quantization is off
+                lfoModulationHz = lfoValue * currentLfoDepth;
+            }
+        }
+
+        // Advance phase for next block
+        lfoPhase += phaseIncrement;
+        lfoPhase = lfoPhase - std::floor(lfoPhase);  // Wrap to 0-1
+    }
+
+    // Final modulated shift value
+    const float currentShiftHz = baseShiftHz + lfoModulationHz;
+
     // Cache crossfade value
     const float crossfade = currentCrossfade;
     const bool singleProc = useSingleProcessor;
 
     // If no processing needed, still apply delay compensation for timing
-    const bool bypassProcessing = (std::abs(currentShiftHz) < 0.01f && currentQuantizeStrength < 0.01f);
+    const bool bypassProcessing = (std::abs(baseShiftHz) < 0.01f && currentLfoDepth < 0.01f && currentQuantizeStrength < 0.01f);
 
     // Process each channel
     for (int channel = 0; channel < std::min(numChannels, MAX_CHANNELS); ++channel)
@@ -1039,33 +1134,13 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
                             std::tie(magnitude, phase) = frequencyShifters[channel][proc]->shift(magnitude, phase, currentShiftHz);
                         }
 
-                        // Apply musical quantization with optional drift
+                        // Apply musical quantization
+                        // Note: LFO now modulates base shift Hz instead of per-bin drift
                         if (currentQuantizeStrength > 0.01f && quantizer)
                         {
-                            // Generate drift values if drift is enabled
-                            std::vector<float> driftCentsVec;
-                            const std::vector<float>* driftPtr = nullptr;
-
-                            if (currentDriftAmount > 0.01f)
-                            {
-                                const int numBins = fftSize / 2;
-                                driftCentsVec.resize(static_cast<size_t>(numBins));
-                                for (int bin = 0; bin < numBins; ++bin)
-                                {
-                                    driftCentsVec[static_cast<size_t>(bin)] = driftModulator.getDrift(bin);
-                                }
-                                driftPtr = &driftCentsVec;
-
-                                // Advance drift modulator for next frame (only once per channel 0, proc 0)
-                                if (channel == 0 && proc == 0)
-                                {
-                                    driftModulator.advanceFrame(hopSize);
-                                }
-                            }
-
                             // Pass the pre-shift envelope for accurate timbre preservation
                             std::tie(magnitude, phase) = quantizer->quantizeSpectrum(
-                                magnitude, phase, currentSampleRate, fftSize, currentQuantizeStrength, driftPtr, envelopePtr);
+                                magnitude, phase, currentSampleRate, fftSize, currentQuantizeStrength, nullptr, envelopePtr);
                         }
 
                         // Apply spectral mask (blend wet/dry per frequency bin)
