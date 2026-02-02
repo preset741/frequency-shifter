@@ -75,12 +75,13 @@ public:
      */
     float process(float input, int channel)
     {
-        // Clamp channel to valid range
-        channel = (channel < 0) ? 0 : (channel >= MAX_CHANNELS) ? MAX_CHANNELS - 1 : channel;
+        // Note: The channel parameter is ignored since each HilbertShifter instance
+        // is dedicated to a single audio channel. We always use internal index 0.
+        (void)channel;  // Suppress unused parameter warning
 
         // Generate quadrature signals using Hilbert transform (allpass networks)
-        float I = processAllpassChainI(input, channel);
-        float Q = processAllpassChainQ(input, channel);
+        float I = processAllpassChainI(input, 0);
+        float Q = processAllpassChainQ(input, 0);
 
         // Generate quadrature oscillator signals
         float cosOsc = static_cast<float>(std::cos(oscPhase));

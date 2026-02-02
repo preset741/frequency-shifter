@@ -860,10 +860,10 @@ void FrequencyShifterProcessor::reinitializeDsp()
     float cutoffHz = 12000.0f * std::pow(1000.0f / 12000.0f, dampNorm);
     feedbackFilterCoeff = std::exp(-2.0f * static_cast<float>(M_PI) * cutoffHz / static_cast<float>(currentSampleRate));
 
-    // Calculate WARM filter coefficients (2-pole Butterworth lowpass at ~11kHz)
-    // This emulates vintage Eventide hardware bandwidth limiting
+    // Calculate WARM filter coefficients (2-pole Butterworth lowpass at ~4.5kHz)
+    // This emulates vintage hardware bandwidth limiting for a noticeably warmer sound
     {
-        const float warmCutoff = 11000.0f;  // ~11kHz rolloff
+        const float warmCutoff = 4500.0f;  // ~4.5kHz rolloff for audible warmth
         const float Q = 0.707f;  // Butterworth Q
         const float omega = 2.0f * static_cast<float>(M_PI) * warmCutoff / static_cast<float>(currentSampleRate);
         const float sinOmega = std::sin(omega);
@@ -1313,35 +1313,9 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
                     // Apply damping filter (one-pole lowpass)
                     float& lpfState = feedbackFilterState[static_cast<size_t>(channel)];
                     lpfState = hpfOutput + feedbackFilterCoeff * (lpfState - hpfOutput);
-                    float filteredSample = lpfState;
-
-                    // Apply WARM filter (vintage bandwidth limiting) if enabled
-                    // This creates the "melting" effect where each feedback repeat loses more highs
-                    if (currentWarmEnabled)
-                    {
-                        auto& warmState = warmFilterState[static_cast<size_t>(channel)];
-                        float wx0 = filteredSample;
-                        float wx1 = warmState[0];
-                        float wx2 = warmState[1];
-                        float wy1 = warmState[2];
-                        float wy2 = warmState[3];
-
-                        float warmOutput = warmFilterCoeffs[0] * wx0
-                                         + warmFilterCoeffs[1] * wx1
-                                         + warmFilterCoeffs[2] * wx2
-                                         + warmFilterCoeffs[3] * wy1
-                                         + warmFilterCoeffs[4] * wy2;
-
-                        warmState[1] = wx1;
-                        warmState[0] = wx0;
-                        warmState[3] = wy1;
-                        warmState[2] = warmOutput;
-
-                        filteredSample = warmOutput;
-                    }
 
                     // Write to feedback buffer
-                    fbBuffer[static_cast<size_t>(feedbackWritePos[static_cast<size_t>(channel)])] = filteredSample;
+                    fbBuffer[static_cast<size_t>(feedbackWritePos[static_cast<size_t>(channel)])] = lpfState;
                     feedbackWritePos[static_cast<size_t>(channel)] = (feedbackWritePos[static_cast<size_t>(channel)] + 1) % fbBufSize;
                 }
 
@@ -1552,7 +1526,7 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
                     auto& fbBuffer = feedbackBuffers[static_cast<size_t>(channel)];
                     int fbBufSize = static_cast<int>(fbBuffer.size());
 
-                    // === Feedback signal chain: HPF (80Hz) → LPF (DAMP) → WARM LPF → Write ===
+                    // === Feedback signal chain: HPF (80Hz) → LPF (DAMP) → Write ===
 
                     // Step 1: Apply highpass filter (80Hz) to prevent low frequency buildup
                     // Biquad Direct Form I: y[n] = b0*x[n] + b1*x[n-1] + b2*x[n-2] - a1*y[n-1] - a2*y[n-2]
@@ -1578,35 +1552,9 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
                     // Step 2: Apply damping filter (one-pole lowpass) to feedback
                     float& lpfState = feedbackFilterState[static_cast<size_t>(channel)];
                     lpfState = hpfOutput + feedbackFilterCoeff * (lpfState - hpfOutput);
-                    float filteredSample = lpfState;
-
-                    // Step 3: Apply WARM filter (vintage bandwidth limiting) if enabled
-                    // This creates the "melting" effect where each feedback repeat loses more highs
-                    if (currentWarmEnabled)
-                    {
-                        auto& warmState = warmFilterState[static_cast<size_t>(channel)];
-                        float wx0 = filteredSample;
-                        float wx1 = warmState[0];
-                        float wx2 = warmState[1];
-                        float wy1 = warmState[2];
-                        float wy2 = warmState[3];
-
-                        float warmOutput = warmFilterCoeffs[0] * wx0
-                                         + warmFilterCoeffs[1] * wx1
-                                         + warmFilterCoeffs[2] * wx2
-                                         + warmFilterCoeffs[3] * wy1
-                                         + warmFilterCoeffs[4] * wy2;
-
-                        warmState[1] = wx1;
-                        warmState[0] = wx0;
-                        warmState[3] = wy1;
-                        warmState[2] = warmOutput;
-
-                        filteredSample = warmOutput;
-                    }
 
                     // Write to feedback buffer
-                    fbBuffer[static_cast<size_t>(feedbackWritePos[static_cast<size_t>(channel)])] = filteredSample;
+                    fbBuffer[static_cast<size_t>(feedbackWritePos[static_cast<size_t>(channel)])] = lpfState;
                     feedbackWritePos[static_cast<size_t>(channel)] = (feedbackWritePos[static_cast<size_t>(channel)] + 1) % fbBufSize;
 
                     // DEBUG: Log output being written to feedback buffer (once per second)
@@ -1643,6 +1591,30 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
                 // === CLASSIC MODE (not switching) ===
                 // Near-zero latency: no dry delay needed
                 wetSample = classicOutput[static_cast<size_t>(i)];
+
+                // Apply WARM filter (vintage bandwidth limiting) to wet signal
+                if (currentWarmEnabled)
+                {
+                    auto& warmState = warmFilterState[static_cast<size_t>(channel)];
+                    float wx0 = wetSample;
+                    float wx1 = warmState[0];
+                    float wx2 = warmState[1];
+                    float wy1 = warmState[2];
+                    float wy2 = warmState[3];
+
+                    float warmOutput = warmFilterCoeffs[0] * wx0
+                                     + warmFilterCoeffs[1] * wx1
+                                     + warmFilterCoeffs[2] * wx2
+                                     + warmFilterCoeffs[3] * wy1
+                                     + warmFilterCoeffs[4] * wy2;
+
+                    warmState[1] = wx1;
+                    warmState[0] = wx0;
+                    warmState[3] = wy1;
+                    warmState[2] = warmOutput;
+
+                    wetSample = warmOutput;
+                }
 
                 // Still write to dry delay buffer to keep it updated for potential mode switch
                 auto& dryBuf = dryDelayBuffers[channel];
@@ -1724,6 +1696,30 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
                     wetSample *= blendedCorrection;
                 }
 
+                // Apply WARM filter (vintage bandwidth limiting) to wet signal
+                if (currentWarmEnabled)
+                {
+                    auto& warmState = warmFilterState[static_cast<size_t>(channel)];
+                    float wx0 = wetSample;
+                    float wx1 = warmState[0];
+                    float wx2 = warmState[1];
+                    float wy1 = warmState[2];
+                    float wy2 = warmState[3];
+
+                    float warmOutput = warmFilterCoeffs[0] * wx0
+                                     + warmFilterCoeffs[1] * wx1
+                                     + warmFilterCoeffs[2] * wx2
+                                     + warmFilterCoeffs[3] * wy1
+                                     + warmFilterCoeffs[4] * wy2;
+
+                    warmState[1] = wx1;
+                    warmState[0] = wx0;
+                    warmState[3] = wy1;
+                    warmState[2] = warmOutput;
+
+                    wetSample = warmOutput;
+                }
+
                 // Mix delayed dry with wet
                 channelData[i] = delayedDrySample * (1.0f - currentDryWet) + wetSample * currentDryWet;
             }
@@ -1788,6 +1784,30 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
                     finalWet = classicWet * fromGain + spectralWet * toGain;
                     // Crossfade dry signal: immediate dry (Classic) -> delayed dry (Spectral)
                     finalDry = drySample * fromGain + delayedDrySample * toGain;
+                }
+
+                // Apply WARM filter (vintage bandwidth limiting) to wet signal
+                if (currentWarmEnabled)
+                {
+                    auto& warmState = warmFilterState[static_cast<size_t>(channel)];
+                    float wx0 = finalWet;
+                    float wx1 = warmState[0];
+                    float wx2 = warmState[1];
+                    float wy1 = warmState[2];
+                    float wy2 = warmState[3];
+
+                    float warmOutput = warmFilterCoeffs[0] * wx0
+                                     + warmFilterCoeffs[1] * wx1
+                                     + warmFilterCoeffs[2] * wx2
+                                     + warmFilterCoeffs[3] * wy1
+                                     + warmFilterCoeffs[4] * wy2;
+
+                    warmState[1] = wx1;
+                    warmState[0] = wx0;
+                    warmState[3] = wy1;
+                    warmState[2] = warmOutput;
+
+                    finalWet = warmOutput;
                 }
 
                 channelData[i] = finalDry * (1.0f - currentDryWet) + finalWet * currentDryWet;
