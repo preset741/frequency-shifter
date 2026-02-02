@@ -2,6 +2,85 @@
 
 All notable changes to the Frequency Shifter plugin will be documented in this file.
 
+## [v55-TempoSync] - 2026-01-30
+
+### Added
+- **Tempo Sync**: Delay time can now sync to host tempo
+  - SYNC toggle: ON = tempo divisions, OFF = milliseconds
+  - 16 divisions: 1/32, 1/16T, 1/16, 1/16D, 1/8T, 1/8, 1/8D, 1/4T, 1/4, 1/4D, 1/2T, 1/2, 1/2D, 1/1, 2/1, 4/1
+  - Reads host BPM via `getPlayHead()->getPosition()->getBpm()`
+
+- **80Hz Highpass Filter**: Prevents low frequency buildup in feedback loop
+  - Two-pole Butterworth biquad (Q=0.707) at fixed 80Hz cutoff
+  - Applied BEFORE the lowpass damping filter
+
+### Signal Chain (Feedback Path)
+```
+Delayed signal → HPF (80Hz) → LPF (DAMP control) → Soft clip → Feedback to input
+```
+
+### Technical Details
+- Tempo sync multipliers relative to quarter note:
+  - 1/32=0.125, 1/16T=0.167, 1/16=0.25, 1/16D=0.375
+  - 1/8T=0.333, 1/8=0.5, 1/8D=0.75
+  - 1/4T=0.667, 1/4=1.0, 1/4D=1.5
+  - 1/2T=1.333, 1/2=2.0, 1/2D=3.0
+  - 1/1=4.0, 2/1=8.0, 4/1=16.0
+- HPF coefficients: Butterworth biquad with Q=0.707, fc=80Hz
+- Fallback BPM: 120 when host tempo unavailable
+
+### Expected Behaviour
+- With SYNC ON and host at 120 BPM: 1/4 = 500ms, 1/8 = 250ms, etc.
+- Bass frequencies no longer accumulate and cause overload
+- Feedback remains controlled even at high FDBK settings with low SHIFT
+
+## [v54-CascadeFeedback] - 2026-01-30
+
+### Added
+- **Cascading Pitch Shift Feedback**: Delay feedback now routes through the frequency shifter
+- Each echo gets shifted again: +100Hz → +200Hz → +300Hz → etc.
+- Time-domain feedback buffer added (up to 2 seconds)
+- One-pole lowpass damping filter on feedback path
+
+### Signal Flow (Changed)
+```
+Old: Input → FFT → Shift → Spectral Delay (internal feedback) → IFFT → Output
+New: Input + Feedback → FFT → Shift → Spectral Delay → IFFT → Output
+            ↑________________________________________________↓
+```
+
+### Technical Details
+- Feedback buffer: `MAX_FEEDBACK_DELAY_SAMPLES = 96000` (~2s at 48kHz)
+- Feedback read position based on TIME parameter (ms → samples)
+- Damping filter: One-pole lowpass, cutoff from 12kHz (0%) to 1kHz (100%)
+- Soft clipping: `tanh()` when feedback exceeds 0.95 threshold
+- Spectral delay internal feedback disabled (set to 0)
+- Feedback only processed once per sample (on proc 0) to avoid double-processing
+
+### Expected Behaviour
+- SHIFT=+100Hz, FDBK=50%: Echoes rise in pitch (+100, +200, +300Hz...)
+- SHIFT=-50Hz, FDBK=50%: Echoes fall in pitch (-50, -100, -150Hz...)
+- DAMP control affects feedback brightness (same as before)
+- SLOPE still affects frequency-dependent delay within spectral domain
+
+## [v53] - 2026-01-30
+
+### Reset
+- Clean slate from v50-PreserveExtreme
+- Reverted Phase 3 feedback delay experiments (v51, v52)
+- All Phase 2B features intact (PRESERVE, TRANSIENTS, SENSITIVITY)
+
+### Current Features
+- Frequency shifting with phase vocoder (Enhanced Mode)
+- Musical scale quantization (22 scales)
+- SMEAR control (5-123ms latency/quality tradeoff)
+- Drift modulation (LFO, Perlin, Stochastic)
+- Spectral mask (Low/High/Band pass)
+- Spectral delay (frequency-dependent timing)
+- PRESERVE: Spectral envelope preservation
+- TRANSIENTS: Transient detection bypass
+- SENSITIVITY: Detection threshold control
+
 ## [v50-PreserveExtreme] - 2026-01-30
 
 ### Enhanced
