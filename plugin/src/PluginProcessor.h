@@ -7,6 +7,7 @@
 #include "dsp/MusicalQuantizer.h"
 #include "dsp/SpectralMask.h"
 #include "dsp/SpectralDelay.h"
+#include "dsp/HilbertShifter.h"
 
 // Size of spectrum data for visualization (half of max FFT size)
 static constexpr int SPECTRUM_SIZE = 2048;
@@ -105,13 +106,17 @@ public:
     static constexpr const char* PARAM_TRANSIENTS = "transients";      // 0-100%
     static constexpr const char* PARAM_SENSITIVITY = "sensitivity";    // 0-100%
 
+    // Processing mode: Classic (Hilbert) vs Spectral (FFT)
+    static constexpr const char* PARAM_PROCESSING_MODE = "processingMode";  // 0=Classic, 1=Spectral
+
     // Valid FFT sizes for SMEAR control (at 44.1kHz)
     // 256 (~6ms), 512 (~12ms), 1024 (~23ms), 2048 (~46ms), 4096 (~93ms)
     static constexpr int FFT_SIZES[] = { 256, 512, 1024, 2048, 4096 };
     static constexpr int NUM_FFT_SIZES = 5;
-    static constexpr int MAX_FFT_SIZE = 4096;  // Fixed latency reported to host
+    static constexpr int MAX_FFT_SIZE = 4096;  // Fixed latency reported to host for Spectral mode
     static constexpr float MIN_SMEAR_MS = 5.0f;
     static constexpr float MAX_SMEAR_MS = 123.0f;
+    static constexpr int CLASSIC_MODE_LATENCY = 12;  // ~0.3ms at 44.1kHz (allpass group delay)
 
     // Get current latency in samples
     int getLatencySamples() const;
@@ -152,6 +157,9 @@ private:
     std::unique_ptr<fshift::MusicalQuantizer> quantizer;
     fshift::SpectralMask spectralMask;
     std::array<std::array<fshift::SpectralDelay, NUM_PROCESSORS>, MAX_CHANNELS> spectralDelays;
+
+    // Hilbert shifter for Classic mode (per channel)
+    std::array<fshift::HilbertShifter, MAX_CHANNELS> hilbertShifters;
 
     // Processing parameters (atomic for thread safety)
     std::atomic<float> shiftHz{ 0.0f };
@@ -226,6 +234,16 @@ private:
     std::atomic<float> preserveAmount{ 0.0f };     // 0.0 - 1.0
     std::atomic<float> transientAmount{ 0.0f };    // 0.0 - 1.0
     std::atomic<float> transientSensitivity{ 0.5f }; // 0.0 - 1.0 (default 50%)
+
+    // Processing mode: 0=Classic (Hilbert), 1=Spectral (FFT)
+    std::atomic<int> processingMode{ 1 };  // Default to Spectral mode
+
+    // Mode switching crossfade state
+    std::atomic<bool> needsModeSwitch{ false };
+    float modeCrossfadeProgress = 1.0f;  // 1.0 = stable, <1.0 = transitioning
+    int targetMode = 1;  // Mode we're switching to
+    int previousMode = 1;  // Mode we're switching from
+    static constexpr float MODE_CROSSFADE_MS = 15.0f;  // 15ms crossfade duration
 
     // Stereo decorrelation (testing feature)
     // Applies 0.06ms delay to left channel to reduce phase-locked resonance

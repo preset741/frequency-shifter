@@ -371,6 +371,17 @@ FrequencyShifterEditor::FrequencyShifterEditor(FrequencyShifterProcessor& p)
 {
     setLookAndFeel(&modernLookAndFeel);
 
+    // Processing mode toggle (Classic vs Spectral)
+    processingModeCombo.addItem("Classic", 1);
+    processingModeCombo.addItem("Spectral", 2);
+    processingModeCombo.onChange = [this]() { updateControlsForMode(); };
+    addAndMakeVisible(processingModeCombo);
+    processingModeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_PROCESSING_MODE, processingModeCombo);
+
+    setupLabel(processingModeLabel, "MODE");
+    addAndMakeVisible(processingModeLabel);
+
     // Setup main shift slider with logarithmic scale (always on)
     setupSlider(shiftSlider, juce::Slider::RotaryHorizontalVerticalDrag);
     shiftSlider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
@@ -855,6 +866,9 @@ FrequencyShifterEditor::FrequencyShifterEditor(FrequencyShifterProcessor& p)
 
     // Initialize delay sync UI state
     updateDelaySyncUI();
+
+    // Initialize mode-dependent control states
+    updateControlsForMode();
 }
 
 FrequencyShifterEditor::~FrequencyShifterEditor()
@@ -927,6 +941,10 @@ void FrequencyShifterEditor::paint(juce::Graphics& g)
 
 void FrequencyShifterEditor::resized()
 {
+    // Mode toggle at top
+    processingModeLabel.setBounds(30, 45, 50, 20);
+    processingModeCombo.setBounds(80, 43, 100, 24);
+
     // Main shift knob - large, centered in left panel
     shiftSlider.setBounds(45, 85, 150, 150);
     shiftLabel.setBounds(45, 235, 150, 20);
@@ -1107,5 +1125,81 @@ void FrequencyShifterEditor::updateDlyLfoSyncUI()
 
     dlyLfoDivisionCombo.setEnabled(syncEnabled);
     dlyLfoDivisionCombo.setAlpha(syncEnabled ? 1.0f : 0.4f);
+}
+
+void FrequencyShifterEditor::updateControlsForMode()
+{
+    // Classic mode (ID=1) disables Spectral-only controls
+    bool isClassic = (processingModeCombo.getSelectedId() == 1);
+    float disabledAlpha = 0.4f;
+    float enabledAlpha = 1.0f;
+
+    // SMEAR - Spectral only (FFT size control)
+    smearSlider.setEnabled(!isClassic);
+    smearSlider.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
+    smearLabel.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
+
+    // Quantize, Root, Scale - Spectral only (harmonic quantization)
+    quantizeSlider.setEnabled(!isClassic);
+    quantizeSlider.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
+    quantizeLabel.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
+
+    rootNoteCombo.setEnabled(!isClassic);
+    rootNoteCombo.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
+    rootNoteLabel.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
+
+    scaleTypeCombo.setEnabled(!isClassic);
+    scaleTypeCombo.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
+    scaleTypeLabel.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
+
+    // PRESERVE, TRANSIENTS, SENSITIVITY - Spectral only (envelope preservation)
+    preserveSlider.setEnabled(!isClassic);
+    preserveSlider.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
+    preserveLabel.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
+
+    transientsSlider.setEnabled(!isClassic);
+    transientsSlider.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
+    transientsLabel.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
+
+    sensitivitySlider.setEnabled(!isClassic);
+    sensitivitySlider.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
+    sensitivityLabel.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
+
+    // LFO Depth Mode (Hz/Degrees) - Degrees mode only useful with quantization
+    lfoDepthModeCombo.setEnabled(!isClassic);
+    lfoDepthModeCombo.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
+
+    // Enhanced Mode (Phase Vocoder) - Spectral only
+    phaseVocoderButton.setEnabled(!isClassic);
+    phaseVocoderButton.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
+
+    // Mask controls - all Spectral only
+    maskEnabledButton.setEnabled(!isClassic);
+    maskEnabledButton.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
+
+    maskModeCombo.setEnabled(!isClassic);
+    maskModeCombo.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
+    maskModeLabel.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
+
+    maskLowFreqSlider.setEnabled(!isClassic);
+    maskLowFreqSlider.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
+    maskLowFreqLabel.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
+
+    maskHighFreqSlider.setEnabled(!isClassic);
+    maskHighFreqSlider.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
+    maskHighFreqLabel.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
+
+    maskTransitionSlider.setEnabled(!isClassic);
+    maskTransitionSlider.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
+    maskTransitionLabel.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
+
+    // SLOPE, DIFFUSE - Spectral delay features
+    delaySlopeSlider.setEnabled(!isClassic);
+    delaySlopeSlider.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
+    delaySlopeLabel.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
+
+    delayDiffuseSlider.setEnabled(!isClassic);
+    delayDiffuseSlider.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
+    delayDiffuseLabel.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
 }
 

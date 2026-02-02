@@ -104,6 +104,12 @@ private:
     // Custom look and feel
     ModernLookAndFeel modernLookAndFeel;
 
+    // Processing Mode toggle (Classic vs Spectral)
+    juce::ComboBox processingModeCombo;
+    juce::Label processingModeLabel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> processingModeAttachment;
+    void updateControlsForMode();  // Enable/disable Spectral-only controls
+
     // Main frequency shift control
     juce::Slider shiftSlider;
     juce::Label shiftLabel;

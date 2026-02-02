@@ -45,6 +45,7 @@ FrequencyShifterProcessor::FrequencyShifterProcessor()
     parameters.addParameterListener(PARAM_PRESERVE, this);
     parameters.addParameterListener(PARAM_TRANSIENTS, this);
     parameters.addParameterListener(PARAM_SENSITIVITY, this);
+    parameters.addParameterListener(PARAM_PROCESSING_MODE, this);
 
     // Initialize quantizer with default scale (C Major)
     quantizer = std::make_unique<fshift::MusicalQuantizer>(60, fshift::ScaleType::Major);
@@ -88,6 +89,7 @@ FrequencyShifterProcessor::~FrequencyShifterProcessor()
     parameters.removeParameterListener(PARAM_PRESERVE, this);
     parameters.removeParameterListener(PARAM_TRANSIENTS, this);
     parameters.removeParameterListener(PARAM_SENSITIVITY, this);
+    parameters.removeParameterListener(PARAM_PROCESSING_MODE, this);
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout FrequencyShifterProcessor::createParameterLayout()
@@ -444,6 +446,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout FrequencyShifterProcessor::c
         50.0f,
         juce::AudioParameterFloatAttributes().withLabel("%")));
 
+    // Processing mode: Classic (Hilbert) vs Spectral (FFT)
+    params.push_back(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID{ PARAM_PROCESSING_MODE, 1 },
+        "Mode",
+        juce::StringArray{ "Classic", "Spectral" },
+        1));  // Default to Spectral
+
     return { params.begin(), params.end() };
 }
 
@@ -650,6 +659,19 @@ void FrequencyShifterProcessor::parameterChanged(const juce::String& parameterID
         if (quantizer)
             quantizer->setTransientSensitivity(newValue / 100.0f);
     }
+    else if (parameterID == PARAM_PROCESSING_MODE)
+    {
+        int newMode = static_cast<int>(newValue);
+        int currentMode = processingMode.load();
+        if (newMode != currentMode)
+        {
+            // Initiate crossfade to new mode
+            previousMode = currentMode;
+            targetMode = newMode;
+            modeCrossfadeProgress = 0.0f;
+            needsModeSwitch.store(true);
+        }
+    }
 }
 
 void FrequencyShifterProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
@@ -815,6 +837,10 @@ void FrequencyShifterProcessor::reinitializeDsp()
         feedbackBuffers[static_cast<size_t>(ch)].resize(MAX_FEEDBACK_DELAY_SAMPLES, 0.0f);
         feedbackWritePos[static_cast<size_t>(ch)] = 0;
         feedbackFilterState[static_cast<size_t>(ch)] = 0.0f;
+
+        // Initialize Hilbert shifter for Classic mode
+        hilbertShifters[static_cast<size_t>(ch)].prepare(currentSampleRate);
+        hilbertShifters[static_cast<size_t>(ch)].reset();
     }
 
     // Calculate initial feedback filter coefficient (lowpass for damping)
@@ -852,8 +878,9 @@ void FrequencyShifterProcessor::reinitializeDsp()
     leftDecorrelateBuffer.resize(static_cast<size_t>(decorrelateDelaySamples + 4), 0.0f);
     decorrelateWritePos = 0;
 
-    // Always report fixed latency of MAX_FFT_SIZE samples to host
-    setLatencySamples(MAX_FFT_SIZE);
+    // Report latency based on current mode
+    int currentMode = processingMode.load();
+    setLatencySamples(currentMode == 0 ? CLASSIC_MODE_LATENCY : MAX_FFT_SIZE);
     needsReinit.store(false);
 }
 
@@ -1143,6 +1170,26 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
     // If no processing needed, still apply delay compensation for timing
     const bool bypassProcessing = (std::abs(baseShiftHz) < 0.01f && currentLfoDepth < 0.01f && currentQuantizeStrength < 0.01f);
 
+    // === Mode Switching Logic ===
+    const int currentMode = processingMode.load();
+    const bool switching = needsModeSwitch.load();
+
+    // Calculate mode crossfade rate (samples to complete transition)
+    const float modeCrossfadeRate = 1.0f / (MODE_CROSSFADE_MS * 0.001f * static_cast<float>(currentSampleRate));
+
+    // If mode switch completed, update latency and finalize
+    if (switching && modeCrossfadeProgress >= 1.0f)
+    {
+        processingMode.store(targetMode);
+        needsModeSwitch.store(false);
+        modeCrossfadeProgress = 1.0f;
+        setLatencySamples(targetMode == 0 ? CLASSIC_MODE_LATENCY : MAX_FFT_SIZE);
+    }
+
+    // Determine active mode (use target mode once crossfade is complete)
+    const bool useClassicMode = switching ? (targetMode == 0) : (currentMode == 0);
+    const bool useSpectralMode = switching ? (previousMode == 1 || targetMode == 1) : (currentMode == 1);
+
     // Process each channel
     for (int channel = 0; channel < std::min(numChannels, MAX_CHANNELS); ++channel)
     {
@@ -1151,17 +1198,104 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
         // Store dry signal for mixing
         std::vector<float> drySignal(channelData, channelData + numSamples);
 
-        // Temp buffers for dual processor output
+        // Temp buffers for outputs
+        std::vector<float> classicOutput(static_cast<size_t>(numSamples), 0.0f);
         std::vector<float> proc0Output(static_cast<size_t>(numSamples), 0.0f);
         std::vector<float> proc1Output(static_cast<size_t>(numSamples), 0.0f);
 
-        // Process through both STFT pipelines (or just one if singleProc)
-        const int numProcs = singleProc ? 1 : 2;
-
-        for (int proc = 0; proc < numProcs; ++proc)
+        // === CLASSIC MODE PROCESSING ===
+        // Uses Hilbert transform for near-zero latency frequency shifting
+        if (useClassicMode || switching)
         {
-            if (!stftProcessors[channel][proc])
-                continue;
+            auto& hilbert = hilbertShifters[static_cast<size_t>(channel)];
+            hilbert.setShiftHz(currentShiftHz);
+
+            for (int i = 0; i < numSamples; ++i)
+            {
+                float inputSample = drySignal[static_cast<size_t>(i)];
+
+                // Add feedback from time-domain buffer (same as Spectral, but NO FFT latency compensation)
+                if (currentDelayEnabled && currentFeedbackAmount > 0.01f)
+                {
+                    auto& fbBuffer = feedbackBuffers[static_cast<size_t>(channel)];
+                    int fbBufSize = static_cast<int>(fbBuffer.size());
+
+                    // Classic mode: NO FFT latency compensation - use raw delay time
+                    int delaySamples = static_cast<int>(modulatedDelayTimeMs * currentSampleRate / 1000.0f);
+
+                    // Ensure minimum delay of ~10ms to prevent artifacts
+                    int minDelaySamples = static_cast<int>(10.0f * currentSampleRate / 1000.0f);
+                    delaySamples = std::clamp(delaySamples, minDelaySamples, fbBufSize - 1);
+
+                    // Read from feedback buffer
+                    int fbReadPos = (feedbackWritePos[static_cast<size_t>(channel)] - delaySamples + fbBufSize) % fbBufSize;
+                    float feedbackSample = fbBuffer[static_cast<size_t>(fbReadPos)];
+
+                    // Apply feedback amount
+                    feedbackSample *= currentFeedbackAmount;
+
+                    // Soft clip feedback for safety
+                    if (std::abs(feedbackSample) > 0.95f)
+                    {
+                        feedbackSample = std::tanh(feedbackSample);
+                    }
+
+                    // MIX controls echo level
+                    inputSample += feedbackSample * currentDelayMixAmount;
+                }
+
+                // Apply Hilbert transform frequency shift
+                float shiftedSample = hilbert.process(inputSample, channel);
+
+                // Write to feedback buffer (with HPF and damping) - only in Classic mode when not switching
+                // During switch, Spectral mode handles feedback writes
+                if (currentDelayEnabled && !switching)
+                {
+                    auto& fbBuffer = feedbackBuffers[static_cast<size_t>(channel)];
+                    int fbBufSize = static_cast<int>(fbBuffer.size());
+
+                    // Apply HPF (80Hz) to prevent low frequency buildup
+                    auto& hpfState = feedbackHpfState[static_cast<size_t>(channel)];
+                    float x0 = shiftedSample;
+                    float x1 = hpfState[0];
+                    float x2 = hpfState[1];
+                    float y1 = hpfState[2];
+                    float y2 = hpfState[3];
+
+                    float hpfOutput = feedbackHpfCoeffs[0] * x0
+                                    + feedbackHpfCoeffs[1] * x1
+                                    + feedbackHpfCoeffs[2] * x2
+                                    + feedbackHpfCoeffs[3] * y1
+                                    + feedbackHpfCoeffs[4] * y2;
+
+                    hpfState[1] = x1;
+                    hpfState[0] = x0;
+                    hpfState[3] = y1;
+                    hpfState[2] = hpfOutput;
+
+                    // Apply damping filter (one-pole lowpass)
+                    float& lpfState = feedbackFilterState[static_cast<size_t>(channel)];
+                    lpfState = hpfOutput + feedbackFilterCoeff * (lpfState - hpfOutput);
+
+                    // Write to feedback buffer
+                    fbBuffer[static_cast<size_t>(feedbackWritePos[static_cast<size_t>(channel)])] = lpfState;
+                    feedbackWritePos[static_cast<size_t>(channel)] = (feedbackWritePos[static_cast<size_t>(channel)] + 1) % fbBufSize;
+                }
+
+                classicOutput[static_cast<size_t>(i)] = shiftedSample;
+            }
+        }
+
+        // === SPECTRAL MODE PROCESSING ===
+        // Process through both STFT pipelines (or just one if singleProc)
+        if (useSpectralMode || switching)
+        {
+            const int numProcs = singleProc ? 1 : 2;
+
+            for (int proc = 0; proc < numProcs; ++proc)
+            {
+                if (!stftProcessors[channel][proc])
+                    continue;
 
             const int fftSize = currentFftSizes[proc];
             const int hopSize = currentHopSizes[proc];
@@ -1401,107 +1535,181 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
                 procOutput[static_cast<size_t>(i)] = outputSample;
             }
         }
+        } // End of Spectral mode processing
 
-        // Crossfade between the two processor outputs (equal-power crossfade)
-        // gain1^2 + gain2^2 = 1 for equal power
-        const float angle = crossfade * static_cast<float>(M_PI) * 0.5f;
-        const float gain0 = std::cos(angle);
-        const float gain1 = std::sin(angle);
+        // === MIXING AND OUTPUT ===
+        // Handle both Classic and Spectral modes, with crossfade during mode switching
+
+        // FFT size crossfade gains (for Spectral mode dual-processor blending)
+        const float fftAngle = crossfade * static_cast<float>(M_PI) * 0.5f;
+        const float fftGain0 = std::cos(fftAngle);
+        const float fftGain1 = std::sin(fftAngle);
 
         for (int i = 0; i < numSamples; ++i)
         {
-            float processed;
-            if (singleProc)
+            float wetSample = 0.0f;
+            float drySample = drySignal[static_cast<size_t>(i)];
+
+            if (currentMode == 0 && !switching)
             {
-                processed = proc0Output[static_cast<size_t>(i)];
+                // === CLASSIC MODE (not switching) ===
+                // Near-zero latency: no dry delay needed
+                wetSample = classicOutput[static_cast<size_t>(i)];
+
+                // Still write to dry delay buffer to keep it updated for potential mode switch
+                auto& dryBuf = dryDelayBuffers[channel];
+                int bufSize = static_cast<int>(dryBuf.size());
+                dryBuf[static_cast<size_t>(dryDelayWritePos[channel])] = drySample;
+                dryDelayWritePos[channel] = (dryDelayWritePos[channel] + 1) % bufSize;
+
+                // Mix dry/wet (no delay on dry for Classic mode)
+                channelData[i] = drySample * (1.0f - currentDryWet) + wetSample * currentDryWet;
+            }
+            else if (currentMode == 1 && !switching)
+            {
+                // === SPECTRAL MODE (not switching) ===
+                // Full FFT latency: apply delay compensation and dry delay
+
+                // Blend dual FFT processor outputs
+                float spectralProcessed;
+                if (singleProc)
+                {
+                    spectralProcessed = proc0Output[static_cast<size_t>(i)];
+                }
+                else
+                {
+                    spectralProcessed = proc0Output[static_cast<size_t>(i)] * fftGain0 +
+                                        proc1Output[static_cast<size_t>(i)] * fftGain1;
+                }
+
+                // Apply delay compensation to maintain fixed latency
+                int effectiveFftSize = singleProc ? currentFftSizes[0] :
+                    static_cast<int>(static_cast<float>(currentFftSizes[0]) * fftGain0 * fftGain0 +
+                                     static_cast<float>(currentFftSizes[1]) * fftGain1 * fftGain1);
+                int delayNeeded = MAX_FFT_SIZE - effectiveFftSize;
+
+                // Write to delay compensation buffer
+                delayCompBuffers[channel][static_cast<size_t>(delayCompWritePos[channel])] = spectralProcessed;
+                delayCompWritePos[channel] = (delayCompWritePos[channel] + 1) %
+                    static_cast<int>(delayCompBuffers[channel].size());
+
+                // Read from delay compensation buffer
+                int readIdx = (delayCompWritePos[channel] - delayNeeded - 1 +
+                    static_cast<int>(delayCompBuffers[channel].size())) %
+                    static_cast<int>(delayCompBuffers[channel].size());
+                wetSample = delayCompBuffers[channel][static_cast<size_t>(readIdx)];
+
+                // Delay dry signal by MAX_FFT_SIZE to align with wet
+                auto& dryBuf = dryDelayBuffers[channel];
+                int bufSize = static_cast<int>(dryBuf.size());
+                dryBuf[static_cast<size_t>(dryDelayWritePos[channel])] = drySample;
+                int dryReadIdx = (dryDelayWritePos[channel] - MAX_FFT_SIZE + bufSize) % bufSize;
+                float delayedDrySample = dryBuf[static_cast<size_t>(dryReadIdx)];
+                dryDelayWritePos[channel] = (dryDelayWritePos[channel] + 1) % bufSize;
+
+                // Phase 2B+ Amplitude envelope tracking (Spectral only)
+                float currentPreserve = preserveAmount.load();
+                if (currentPreserve > 0.01f && !bypassProcessing)
+                {
+                    float inputAbs = std::abs(delayedDrySample);
+                    if (inputAbs > inputEnvelope[static_cast<size_t>(channel)])
+                        inputEnvelope[static_cast<size_t>(channel)] =
+                            inputAbs + envAttackCoeff * (inputEnvelope[static_cast<size_t>(channel)] - inputAbs);
+                    else
+                        inputEnvelope[static_cast<size_t>(channel)] =
+                            inputAbs + envReleaseCoeff * (inputEnvelope[static_cast<size_t>(channel)] - inputAbs);
+
+                    float outputAbs = std::abs(wetSample);
+                    if (outputAbs > outputEnvelope[static_cast<size_t>(channel)])
+                        outputEnvelope[static_cast<size_t>(channel)] =
+                            outputAbs + envAttackCoeff * (outputEnvelope[static_cast<size_t>(channel)] - outputAbs);
+                    else
+                        outputEnvelope[static_cast<size_t>(channel)] =
+                            outputAbs + envReleaseCoeff * (outputEnvelope[static_cast<size_t>(channel)] - outputAbs);
+
+                    float effectiveStrength = std::pow(currentPreserve, 0.7f);
+                    constexpr float epsilon = 1e-6f;
+                    float gainCorrection = inputEnvelope[static_cast<size_t>(channel)] /
+                                           (outputEnvelope[static_cast<size_t>(channel)] + epsilon);
+                    gainCorrection = std::clamp(gainCorrection, 0.25f, 4.0f);
+                    float blendedCorrection = 1.0f + effectiveStrength * (gainCorrection - 1.0f);
+                    wetSample *= blendedCorrection;
+                }
+
+                // Mix delayed dry with wet
+                channelData[i] = delayedDrySample * (1.0f - currentDryWet) + wetSample * currentDryWet;
             }
             else
             {
-                processed = proc0Output[static_cast<size_t>(i)] * gain0 + proc1Output[static_cast<size_t>(i)] * gain1;
-            }
+                // === MODE SWITCHING - Crossfade between modes ===
+                float classicWet = classicOutput[static_cast<size_t>(i)];
 
-            // Apply delay compensation to maintain fixed latency to host
-            // The host expects MAX_FFT_SIZE latency, so we add extra delay for smaller FFT sizes
-            int effectiveFftSize = singleProc ? currentFftSizes[0] :
-                static_cast<int>(static_cast<float>(currentFftSizes[0]) * gain0 * gain0 +
-                                 static_cast<float>(currentFftSizes[1]) * gain1 * gain1);
-            int delayNeeded = MAX_FFT_SIZE - effectiveFftSize;
-
-            // Write to delay compensation buffer
-            delayCompBuffers[channel][static_cast<size_t>(delayCompWritePos[channel])] = processed;
-            delayCompWritePos[channel] = (delayCompWritePos[channel] + 1) % static_cast<int>(delayCompBuffers[channel].size());
-
-            // Read from delay compensation buffer with the needed delay
-            int readIdx = (delayCompWritePos[channel] - delayNeeded - 1 + static_cast<int>(delayCompBuffers[channel].size()))
-                         % static_cast<int>(delayCompBuffers[channel].size());
-            float wetSample = delayCompBuffers[channel][static_cast<size_t>(readIdx)];
-
-            // Delay dry signal by full reported latency (MAX_FFT_SIZE samples)
-            // This ensures dry and wet are time-aligned when mixed
-            auto& dryBuf = dryDelayBuffers[channel];
-            int bufSize = static_cast<int>(dryBuf.size());
-
-            // Write current dry sample
-            dryBuf[static_cast<size_t>(dryDelayWritePos[channel])] = drySignal[static_cast<size_t>(i)];
-
-            // Read delayed dry sample (MAX_FFT_SIZE samples behind)
-            int dryReadIdx = (dryDelayWritePos[channel] - MAX_FFT_SIZE + bufSize) % bufSize;
-            float delayedDrySample = dryBuf[static_cast<size_t>(dryReadIdx)];
-
-            // Advance write position
-            dryDelayWritePos[channel] = (dryDelayWritePos[channel] + 1) % bufSize;
-
-            // Phase 2B+ Amplitude envelope tracking and correction
-            // Tied to PRESERVE control - at 100%, both spectral AND amplitude dynamics match input
-            float currentPreserve = preserveAmount.load();
-            if (currentPreserve > 0.01f && !bypassProcessing)
-            {
-                // Track input amplitude envelope (from delayed dry signal, time-aligned)
-                float inputAbs = std::abs(delayedDrySample);
-                if (inputAbs > inputEnvelope[static_cast<size_t>(channel)])
+                // Process Spectral output with delay compensation
+                float spectralProcessed;
+                if (singleProc)
                 {
-                    // Attack: fast rise
-                    inputEnvelope[static_cast<size_t>(channel)] =
-                        inputAbs + envAttackCoeff * (inputEnvelope[static_cast<size_t>(channel)] - inputAbs);
+                    spectralProcessed = proc0Output[static_cast<size_t>(i)];
                 }
                 else
                 {
-                    // Release: slow decay
-                    inputEnvelope[static_cast<size_t>(channel)] =
-                        inputAbs + envReleaseCoeff * (inputEnvelope[static_cast<size_t>(channel)] - inputAbs);
+                    spectralProcessed = proc0Output[static_cast<size_t>(i)] * fftGain0 +
+                                        proc1Output[static_cast<size_t>(i)] * fftGain1;
                 }
 
-                // Track output amplitude envelope (from wet signal before correction)
-                float outputAbs = std::abs(wetSample);
-                if (outputAbs > outputEnvelope[static_cast<size_t>(channel)])
+                int effectiveFftSize = singleProc ? currentFftSizes[0] :
+                    static_cast<int>(static_cast<float>(currentFftSizes[0]) * fftGain0 * fftGain0 +
+                                     static_cast<float>(currentFftSizes[1]) * fftGain1 * fftGain1);
+                int delayNeeded = MAX_FFT_SIZE - effectiveFftSize;
+
+                delayCompBuffers[channel][static_cast<size_t>(delayCompWritePos[channel])] = spectralProcessed;
+                delayCompWritePos[channel] = (delayCompWritePos[channel] + 1) %
+                    static_cast<int>(delayCompBuffers[channel].size());
+
+                int readIdx = (delayCompWritePos[channel] - delayNeeded - 1 +
+                    static_cast<int>(delayCompBuffers[channel].size())) %
+                    static_cast<int>(delayCompBuffers[channel].size());
+                float spectralWet = delayCompBuffers[channel][static_cast<size_t>(readIdx)];
+
+                // Handle dry signal delay buffer
+                auto& dryBuf = dryDelayBuffers[channel];
+                int bufSize = static_cast<int>(dryBuf.size());
+                dryBuf[static_cast<size_t>(dryDelayWritePos[channel])] = drySample;
+                int dryReadIdx = (dryDelayWritePos[channel] - MAX_FFT_SIZE + bufSize) % bufSize;
+                float delayedDrySample = dryBuf[static_cast<size_t>(dryReadIdx)];
+                dryDelayWritePos[channel] = (dryDelayWritePos[channel] + 1) % bufSize;
+
+                // Mode crossfade (equal-power)
+                float progress = modeCrossfadeProgress + modeCrossfadeRate * static_cast<float>(i);
+                progress = std::min(1.0f, progress);
+                float modeAngle = progress * static_cast<float>(M_PI) * 0.5f;
+                float fromGain = std::cos(modeAngle);
+                float toGain = std::sin(modeAngle);
+
+                float finalWet;
+                float finalDry;
+                if (targetMode == 0)
                 {
-                    outputEnvelope[static_cast<size_t>(channel)] =
-                        outputAbs + envAttackCoeff * (outputEnvelope[static_cast<size_t>(channel)] - outputAbs);
+                    // Switching TO Classic (FROM Spectral)
+                    finalWet = spectralWet * fromGain + classicWet * toGain;
+                    // Crossfade dry signal: delayed dry (Spectral) -> immediate dry (Classic)
+                    finalDry = delayedDrySample * fromGain + drySample * toGain;
                 }
                 else
                 {
-                    outputEnvelope[static_cast<size_t>(channel)] =
-                        outputAbs + envReleaseCoeff * (outputEnvelope[static_cast<size_t>(channel)] - outputAbs);
+                    // Switching TO Spectral (FROM Classic)
+                    finalWet = classicWet * fromGain + spectralWet * toGain;
+                    // Crossfade dry signal: immediate dry (Classic) -> delayed dry (Spectral)
+                    finalDry = drySample * fromGain + delayedDrySample * toGain;
                 }
 
-                // Apply gain correction to match output envelope to input envelope
-                // Use non-linear strength (same curve as spectral preserve)
-                float effectiveStrength = std::pow(currentPreserve, 0.7f);
-                constexpr float epsilon = 1e-6f;
-                float gainCorrection = inputEnvelope[static_cast<size_t>(channel)] /
-                                       (outputEnvelope[static_cast<size_t>(channel)] + epsilon);
-
-                // Clamp correction to avoid extreme values (±12dB range)
-                gainCorrection = std::clamp(gainCorrection, 0.25f, 4.0f);
-
-                // Blend: at effectiveStrength=0, no correction; at 1, full correction
-                float blendedCorrection = 1.0f + effectiveStrength * (gainCorrection - 1.0f);
-
-                wetSample *= blendedCorrection;
+                channelData[i] = finalDry * (1.0f - currentDryWet) + finalWet * currentDryWet;
             }
+        }
 
-            // Mix delayed dry with (possibly corrected) wet
-            channelData[i] = delayedDrySample * (1.0f - currentDryWet) + wetSample * currentDryWet;
+        // Update mode crossfade progress at end of block
+        if (switching)
+        {
+            modeCrossfadeProgress += modeCrossfadeRate * static_cast<float>(numSamples);
         }
     }
 
@@ -1530,8 +1738,10 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
 
 int FrequencyShifterProcessor::getLatencySamples() const
 {
-    // Always report fixed latency for DAW timing stability
-    return MAX_FFT_SIZE;
+    // Report latency based on processing mode
+    // Classic mode: near-zero latency (~12 samples for allpass group delay)
+    // Spectral mode: full FFT latency (4096 samples)
+    return (processingMode.load() == 0) ? CLASSIC_MODE_LATENCY : MAX_FFT_SIZE;
 }
 
 double FrequencyShifterProcessor::getTailLengthSeconds() const
