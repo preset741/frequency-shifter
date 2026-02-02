@@ -89,21 +89,23 @@ public:
         // Single sideband modulation
         // Upper sideband (shift up): I * cos - Q * sin
         // Lower sideband (shift down): I * cos + Q * sin
-        // We use: output = I * cos(ωt) - Q * sin(ωt) for positive shift
-        float output = I * cosOsc - Q * sinOsc;
+        float output;
+        if (shiftHz >= 0.0f)
+            output = I * cosOsc - Q * sinOsc;  // Upper sideband
+        else
+            output = I * cosOsc + Q * sinOsc;  // Lower sideband
 
-        // Advance oscillator phase (only on channel 0 to keep stereo coherent)
-        if (channel == 0)
-        {
-            double phaseIncrement = 2.0 * M_PI * shiftHz / sampleRate;
-            oscPhase += phaseIncrement;
+        // Advance oscillator phase using absolute frequency
+        // Note: Each HilbertShifter instance handles one audio channel,
+        // so we always advance the oscillator regardless of channel parameter
+        double phaseIncrement = 2.0 * M_PI * std::abs(shiftHz) / sampleRate;
+        oscPhase += phaseIncrement;
 
-            // Wrap phase to prevent numerical issues
-            while (oscPhase >= 2.0 * M_PI)
-                oscPhase -= 2.0 * M_PI;
-            while (oscPhase < 0.0)
-                oscPhase += 2.0 * M_PI;
-        }
+        // Wrap phase to prevent numerical issues
+        while (oscPhase >= 2.0 * M_PI)
+            oscPhase -= 2.0 * M_PI;
+        while (oscPhase < 0.0)
+            oscPhase += 2.0 * M_PI;
 
         return output;
     }

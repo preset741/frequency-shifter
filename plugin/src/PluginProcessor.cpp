@@ -46,6 +46,7 @@ FrequencyShifterProcessor::FrequencyShifterProcessor()
     parameters.addParameterListener(PARAM_TRANSIENTS, this);
     parameters.addParameterListener(PARAM_SENSITIVITY, this);
     parameters.addParameterListener(PARAM_PROCESSING_MODE, this);
+    parameters.addParameterListener(PARAM_WARM, this);
 
     // Initialize quantizer with default scale (C Major)
     quantizer = std::make_unique<fshift::MusicalQuantizer>(60, fshift::ScaleType::Major);
@@ -90,6 +91,7 @@ FrequencyShifterProcessor::~FrequencyShifterProcessor()
     parameters.removeParameterListener(PARAM_TRANSIENTS, this);
     parameters.removeParameterListener(PARAM_SENSITIVITY, this);
     parameters.removeParameterListener(PARAM_PROCESSING_MODE, this);
+    parameters.removeParameterListener(PARAM_WARM, this);
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout FrequencyShifterProcessor::createParameterLayout()
@@ -453,6 +455,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout FrequencyShifterProcessor::c
         juce::StringArray{ "Classic", "Spectral" },
         1));  // Default to Spectral
 
+    // WARM: Vintage bandwidth limiting (~10-12kHz rolloff on wet signal)
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID{ PARAM_WARM, 1 },
+        "Warm",
+        false));  // Default to off
+
     return { params.begin(), params.end() };
 }
 
@@ -672,6 +680,10 @@ void FrequencyShifterProcessor::parameterChanged(const juce::String& parameterID
             needsModeSwitch.store(true);
         }
     }
+    else if (parameterID == PARAM_WARM)
+    {
+        warmEnabled.store(newValue > 0.5f);
+    }
 }
 
 void FrequencyShifterProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
@@ -848,6 +860,30 @@ void FrequencyShifterProcessor::reinitializeDsp()
     float cutoffHz = 12000.0f * std::pow(1000.0f / 12000.0f, dampNorm);
     feedbackFilterCoeff = std::exp(-2.0f * static_cast<float>(M_PI) * cutoffHz / static_cast<float>(currentSampleRate));
 
+    // Calculate WARM filter coefficients (2-pole Butterworth lowpass at ~11kHz)
+    // This emulates vintage Eventide hardware bandwidth limiting
+    {
+        const float warmCutoff = 11000.0f;  // ~11kHz rolloff
+        const float Q = 0.707f;  // Butterworth Q
+        const float omega = 2.0f * static_cast<float>(M_PI) * warmCutoff / static_cast<float>(currentSampleRate);
+        const float sinOmega = std::sin(omega);
+        const float cosOmega = std::cos(omega);
+        const float alpha = sinOmega / (2.0f * Q);
+
+        const float a0 = 1.0f + alpha;
+        warmFilterCoeffs[0] = ((1.0f - cosOmega) / 2.0f) / a0;  // b0
+        warmFilterCoeffs[1] = (1.0f - cosOmega) / a0;            // b1
+        warmFilterCoeffs[2] = ((1.0f - cosOmega) / 2.0f) / a0;  // b2
+        warmFilterCoeffs[3] = -(-2.0f * cosOmega) / a0;          // -a1 (negated for direct form)
+        warmFilterCoeffs[4] = -(1.0f - alpha) / a0;              // -a2 (negated for direct form)
+
+        // Reset WARM filter state
+        for (int ch = 0; ch < MAX_CHANNELS; ++ch)
+        {
+            warmFilterState[static_cast<size_t>(ch)].fill(0.0f);
+        }
+    }
+
     // Calculate highpass filter coefficients (80Hz, Q=0.707, Butterworth)
     // This prevents low frequency buildup in the feedback loop
     {
@@ -941,6 +977,7 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
     const float currentDryWet = dryWetMix.load();
     const bool currentUsePhaseVocoder = usePhaseVocoder.load();
     const bool currentMaskEnabled = maskEnabled.load();
+    const bool currentWarmEnabled = warmEnabled.load();
 
     // LFO modulation parameters
     const float currentLfoDepth = lfoDepth.load();
@@ -1247,7 +1284,7 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
                 // Apply Hilbert transform frequency shift
                 float shiftedSample = hilbert.process(inputSample, channel);
 
-                // Write to feedback buffer (with HPF and damping) - only in Classic mode when not switching
+                // Write to feedback buffer (with HPF, damping, and WARM) - only in Classic mode when not switching
                 // During switch, Spectral mode handles feedback writes
                 if (currentDelayEnabled && !switching)
                 {
@@ -1276,9 +1313,35 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
                     // Apply damping filter (one-pole lowpass)
                     float& lpfState = feedbackFilterState[static_cast<size_t>(channel)];
                     lpfState = hpfOutput + feedbackFilterCoeff * (lpfState - hpfOutput);
+                    float filteredSample = lpfState;
+
+                    // Apply WARM filter (vintage bandwidth limiting) if enabled
+                    // This creates the "melting" effect where each feedback repeat loses more highs
+                    if (currentWarmEnabled)
+                    {
+                        auto& warmState = warmFilterState[static_cast<size_t>(channel)];
+                        float wx0 = filteredSample;
+                        float wx1 = warmState[0];
+                        float wx2 = warmState[1];
+                        float wy1 = warmState[2];
+                        float wy2 = warmState[3];
+
+                        float warmOutput = warmFilterCoeffs[0] * wx0
+                                         + warmFilterCoeffs[1] * wx1
+                                         + warmFilterCoeffs[2] * wx2
+                                         + warmFilterCoeffs[3] * wy1
+                                         + warmFilterCoeffs[4] * wy2;
+
+                        warmState[1] = wx1;
+                        warmState[0] = wx0;
+                        warmState[3] = wy1;
+                        warmState[2] = warmOutput;
+
+                        filteredSample = warmOutput;
+                    }
 
                     // Write to feedback buffer
-                    fbBuffer[static_cast<size_t>(feedbackWritePos[static_cast<size_t>(channel)])] = lpfState;
+                    fbBuffer[static_cast<size_t>(feedbackWritePos[static_cast<size_t>(channel)])] = filteredSample;
                     feedbackWritePos[static_cast<size_t>(channel)] = (feedbackWritePos[static_cast<size_t>(channel)] + 1) % fbBufSize;
                 }
 
@@ -1489,7 +1552,7 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
                     auto& fbBuffer = feedbackBuffers[static_cast<size_t>(channel)];
                     int fbBufSize = static_cast<int>(fbBuffer.size());
 
-                    // === Feedback signal chain: HPF (80Hz) → LPF (DAMP) → Write ===
+                    // === Feedback signal chain: HPF (80Hz) → LPF (DAMP) → WARM LPF → Write ===
 
                     // Step 1: Apply highpass filter (80Hz) to prevent low frequency buildup
                     // Biquad Direct Form I: y[n] = b0*x[n] + b1*x[n-1] + b2*x[n-2] - a1*y[n-1] - a2*y[n-2]
@@ -1516,6 +1579,31 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
                     float& lpfState = feedbackFilterState[static_cast<size_t>(channel)];
                     lpfState = hpfOutput + feedbackFilterCoeff * (lpfState - hpfOutput);
                     float filteredSample = lpfState;
+
+                    // Step 3: Apply WARM filter (vintage bandwidth limiting) if enabled
+                    // This creates the "melting" effect where each feedback repeat loses more highs
+                    if (currentWarmEnabled)
+                    {
+                        auto& warmState = warmFilterState[static_cast<size_t>(channel)];
+                        float wx0 = filteredSample;
+                        float wx1 = warmState[0];
+                        float wx2 = warmState[1];
+                        float wy1 = warmState[2];
+                        float wy2 = warmState[3];
+
+                        float warmOutput = warmFilterCoeffs[0] * wx0
+                                         + warmFilterCoeffs[1] * wx1
+                                         + warmFilterCoeffs[2] * wx2
+                                         + warmFilterCoeffs[3] * wy1
+                                         + warmFilterCoeffs[4] * wy2;
+
+                        warmState[1] = wx1;
+                        warmState[0] = wx0;
+                        warmState[3] = wy1;
+                        warmState[2] = warmOutput;
+
+                        filteredSample = warmOutput;
+                    }
 
                     // Write to feedback buffer
                     fbBuffer[static_cast<size_t>(feedbackWritePos[static_cast<size_t>(channel)])] = filteredSample;

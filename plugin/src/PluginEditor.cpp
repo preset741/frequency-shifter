@@ -808,6 +808,13 @@ FrequencyShifterEditor::FrequencyShifterEditor(FrequencyShifterProcessor& p)
     setupLabel(delayDampingLabel, "DAMP");
     addAndMakeVisible(delayDampingLabel);
 
+    // WARM toggle (vintage bandwidth limiting on feedback)
+    warmButton.setButtonText("WARM");
+    warmButton.setColour(juce::ToggleButton::textColourId, juce::Colour(Colors::text));
+    addAndMakeVisible(warmButton);
+    warmAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_WARM, warmButton);
+
     // Delay diffuse slider (spectral delay wet/dry - smear effect)
     setupSlider(delayDiffuseSlider, juce::Slider::LinearHorizontal);
     delayDiffuseSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
@@ -944,6 +951,7 @@ void FrequencyShifterEditor::resized()
     // Mode toggle at top
     processingModeLabel.setBounds(30, 45, 50, 20);
     processingModeCombo.setBounds(80, 43, 100, 24);
+    warmButton.setBounds(190, 43, 70, 24);
 
     // Main shift knob - large, centered in left panel
     shiftSlider.setBounds(45, 85, 150, 150);

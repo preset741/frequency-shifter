@@ -109,6 +109,9 @@ public:
     // Processing mode: Classic (Hilbert) vs Spectral (FFT)
     static constexpr const char* PARAM_PROCESSING_MODE = "processingMode";  // 0=Classic, 1=Spectral
 
+    // WARM: Vintage bandwidth limiting (~10-12kHz rolloff on wet signal)
+    static constexpr const char* PARAM_WARM = "warm";
+
     // Valid FFT sizes for SMEAR control (at 44.1kHz)
     // 256 (~6ms), 512 (~12ms), 1024 (~23ms), 2048 (~46ms), 4096 (~93ms)
     static constexpr int FFT_SIZES[] = { 256, 512, 1024, 2048, 4096 };
@@ -237,6 +240,14 @@ private:
 
     // Processing mode: 0=Classic (Hilbert), 1=Spectral (FFT)
     std::atomic<int> processingMode{ 1 };  // Default to Spectral mode
+
+    // WARM: Vintage bandwidth limiting
+    std::atomic<bool> warmEnabled{ false };
+
+    // WARM lowpass filter state (2-pole Butterworth ~10-12kHz)
+    // Applied to wet signal only, before feedback path for "melting" effect
+    std::array<std::array<float, 4>, MAX_CHANNELS> warmFilterState{};  // [x1, x2, y1, y2] per channel
+    std::array<float, 5> warmFilterCoeffs{};  // Biquad coefficients [b0, b1, b2, a1, a2]
 
     // Mode switching crossfade state
     std::atomic<bool> needsModeSwitch{ false };

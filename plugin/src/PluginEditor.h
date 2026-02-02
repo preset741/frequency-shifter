@@ -110,6 +110,10 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> processingModeAttachment;
     void updateControlsForMode();  // Enable/disable Spectral-only controls
 
+    // WARM toggle (vintage bandwidth limiting)
+    juce::ToggleButton warmButton;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> warmAttachment;
+
     // Main frequency shift control
     juce::Slider shiftSlider;
     juce::Label shiftLabel;
