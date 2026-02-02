@@ -826,17 +826,6 @@ FrequencyShifterEditor::FrequencyShifterEditor(FrequencyShifterProcessor& p)
     setupLabel(delayDiffuseLabel, "DIFFUSE");
     addAndMakeVisible(delayDiffuseLabel);
 
-    // Delay mix slider (time-domain delay echo level)
-    setupSlider(delayMixSlider, juce::Slider::LinearHorizontal);
-    delayMixSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
-    delayMixSlider.setNumDecimalPlacesToDisplay(0);
-    addAndMakeVisible(delayMixSlider);
-    delayMixAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
-        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_DELAY_MIX, delayMixSlider);
-
-    setupLabel(delayMixLabel, "MIX");
-    addAndMakeVisible(delayMixLabel);
-
     // Stereo decorrelation toggle (testing feature)
     // Applies 0.06ms delay to left channel to reduce phase-locked resonance
     stereoDecorrelateToggle.setButtonText("L/R Decorr");
@@ -1061,9 +1050,6 @@ void FrequencyShifterEditor::resized()
 
     delayDiffuseLabel.setBounds(315, 667, 55, 20);
     delayDiffuseSlider.setBounds(370, 665, 90, 24);
-
-    delayMixLabel.setBounds(470, 667, 30, 20);
-    delayMixSlider.setBounds(500, 665, 110, 24);
 
     // Stereo decorrelation toggle (bottom right corner - testing feature)
     stereoDecorrelateToggle.setBounds(520, 690, 110, 20);

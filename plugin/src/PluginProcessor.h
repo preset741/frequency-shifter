@@ -98,7 +98,6 @@ public:
     static constexpr const char* PARAM_DELAY_FEEDBACK = "delayFeedback";
     static constexpr const char* PARAM_DELAY_DAMPING = "delayDamping";
     static constexpr const char* PARAM_DELAY_DIFFUSE = "delayDiffuse";  // Spectral delay wet/dry (smear effect)
-    static constexpr const char* PARAM_DELAY_MIX = "delayMix";          // Time-domain delay echo level
     static constexpr const char* PARAM_DELAY_GAIN = "delayGain";
 
     // Phase 2B: Envelope preservation and transient detection
@@ -230,7 +229,6 @@ private:
     std::atomic<float> delayFeedback{ 30.0f };
     std::atomic<float> delayDamping{ 30.0f };
     std::atomic<float> delayDiffuse{ 50.0f };  // Spectral delay wet/dry (smear effect)
-    std::atomic<float> delayMix{ 100.0f };     // Time-domain delay echo level (0-100%)
     std::atomic<float> delayGain{ 0.0f };  // dB
 
     // Phase 2B: Envelope preservation and transient detection

@@ -40,7 +40,6 @@ FrequencyShifterProcessor::FrequencyShifterProcessor()
     parameters.addParameterListener(PARAM_DELAY_FEEDBACK, this);
     parameters.addParameterListener(PARAM_DELAY_DAMPING, this);
     parameters.addParameterListener(PARAM_DELAY_DIFFUSE, this);
-    parameters.addParameterListener(PARAM_DELAY_MIX, this);
     parameters.addParameterListener(PARAM_DELAY_GAIN, this);
     parameters.addParameterListener(PARAM_PRESERVE, this);
     parameters.addParameterListener(PARAM_TRANSIENTS, this);
@@ -85,7 +84,6 @@ FrequencyShifterProcessor::~FrequencyShifterProcessor()
     parameters.removeParameterListener(PARAM_DELAY_FEEDBACK, this);
     parameters.removeParameterListener(PARAM_DELAY_DAMPING, this);
     parameters.removeParameterListener(PARAM_DELAY_DIFFUSE, this);
-    parameters.removeParameterListener(PARAM_DELAY_MIX, this);
     parameters.removeParameterListener(PARAM_DELAY_GAIN, this);
     parameters.removeParameterListener(PARAM_PRESERVE, this);
     parameters.removeParameterListener(PARAM_TRANSIENTS, this);
@@ -405,14 +403,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout FrequencyShifterProcessor::c
         50.0f,
         juce::AudioParameterFloatAttributes().withLabel("%")));
 
-    // Delay mix (0-100%) - time-domain delay echo level
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        juce::ParameterID{ PARAM_DELAY_MIX, 1 },
-        "Mix",
-        juce::NormalisableRange<float>(0.0f, 100.0f, 0.1f),
-        100.0f,
-        juce::AudioParameterFloatAttributes().withLabel("%")));
-
     // Delay gain (-12 to +24 dB)
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID{ PARAM_DELAY_GAIN, 1 },
@@ -636,11 +626,6 @@ void FrequencyShifterProcessor::parameterChanged(const juce::String& parameterID
         for (auto& chDelays : spectralDelays)
             for (auto& delay : chDelays)
                 delay.setMix(newValue);  // Spectral delay uses "mix" internally for diffuse
-    }
-    else if (parameterID == PARAM_DELAY_MIX)
-    {
-        delayMix.store(newValue);
-        // This controls time-domain delay echo level, used in processBlock
     }
     else if (parameterID == PARAM_DELAY_GAIN)
     {
@@ -990,7 +975,6 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
     const bool currentDelaySync = delaySync.load();
     const int currentDelayDivision = delayDivision.load();
     const float currentFeedbackAmount = delayFeedback.load() / 100.0f;  // 0-0.95
-    const float currentDelayMixAmount = delayMix.load() / 100.0f;  // 0-1, controls echo level
 
     // Read host tempo for tempo sync
     double currentBpm = 120.0;  // Fallback
@@ -1239,7 +1223,6 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
         std::vector<float> classicOutput(static_cast<size_t>(numSamples), 0.0f);
         std::vector<float> proc0Output(static_cast<size_t>(numSamples), 0.0f);
         std::vector<float> proc1Output(static_cast<size_t>(numSamples), 0.0f);
-        std::vector<float> spectralDelayedWet(static_cast<size_t>(numSamples), 0.0f);  // For delay MIX crossfade
 
         // === CLASSIC MODE PROCESSING ===
         // Uses Hilbert transform for near-zero latency frequency shifting
@@ -1252,9 +1235,8 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
             {
                 float inputSample = drySignal[static_cast<size_t>(i)];
 
-                // Read delayed signal for output mixing (before feedback is added to input)
-                float delayedWetSample = 0.0f;
-                if (currentDelayEnabled)
+                // Add feedback from delay buffer for cascading pitch shifts
+                if (currentDelayEnabled && currentFeedbackAmount > 0.01f)
                 {
                     auto& fbBuffer = feedbackBuffers[static_cast<size_t>(channel)];
                     int fbBufSize = static_cast<int>(fbBuffer.size());
@@ -1266,29 +1248,23 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
                     int minDelaySamples = static_cast<int>(10.0f * currentSampleRate / 1000.0f);
                     delaySamples = std::clamp(delaySamples, minDelaySamples, fbBufSize - 1);
 
-                    // Read from feedback buffer for output mixing
+                    // Read from feedback buffer
                     int fbReadPos = (feedbackWritePos[static_cast<size_t>(channel)] - delaySamples + fbBufSize) % fbBufSize;
-                    delayedWetSample = fbBuffer[static_cast<size_t>(fbReadPos)];
+                    float feedbackSample = fbBuffer[static_cast<size_t>(fbReadPos)] * currentFeedbackAmount;
 
-                    // Add feedback to input for cascading pitch shifts (controlled by FEEDBACK)
-                    if (currentFeedbackAmount > 0.01f)
+                    // Soft clip feedback for safety
+                    if (std::abs(feedbackSample) > 0.95f)
                     {
-                        float feedbackSample = delayedWetSample * currentFeedbackAmount;
-
-                        // Soft clip feedback for safety
-                        if (std::abs(feedbackSample) > 0.95f)
-                        {
-                            feedbackSample = std::tanh(feedbackSample);
-                        }
-
-                        inputSample += feedbackSample;
+                        feedbackSample = std::tanh(feedbackSample);
                     }
+
+                    inputSample += feedbackSample;
                 }
 
                 // Apply Hilbert transform frequency shift
                 float shiftedSample = hilbert.process(inputSample, channel);
 
-                // Write to feedback buffer (with HPF, damping, and WARM) - only in Classic mode when not switching
+                // Write to feedback buffer (with HPF and damping) - only in Classic mode when not switching
                 // During switch, Spectral mode handles feedback writes
                 if (currentDelayEnabled && !switching)
                 {
@@ -1323,20 +1299,8 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
                     feedbackWritePos[static_cast<size_t>(channel)] = (feedbackWritePos[static_cast<size_t>(channel)] + 1) % fbBufSize;
                 }
 
-                // MIX crossfades between direct wet and delayed wet
-                // At MIX=0%: 100% direct shifted signal
-                // At MIX=100%: 100% delayed signal (echoes only)
-                float finalWetSample;
-                if (currentDelayEnabled)
-                {
-                    finalWetSample = shiftedSample * (1.0f - currentDelayMixAmount) + delayedWetSample * currentDelayMixAmount;
-                }
-                else
-                {
-                    finalWetSample = shiftedSample;
-                }
-
-                classicOutput[static_cast<size_t>(i)] = finalWetSample;
+                // Output is always the direct shifted signal (feedback creates cascading effect in input)
+                classicOutput[static_cast<size_t>(i)] = shiftedSample;
             }
         }
 
@@ -1390,26 +1354,18 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
                     int minDelaySamples = static_cast<int>(10.0f * currentSampleRate / 1000.0f);
                     delaySamples = std::clamp(delaySamples, minDelaySamples, fbBufSize - 1);
 
-                    // Read from feedback buffer
+                    // Read from feedback buffer and add to input for cascading pitch shifts
                     int fbReadPos = (feedbackWritePos[static_cast<size_t>(channel)] - delaySamples + fbBufSize) % fbBufSize;
                     float delayedSample = fbBuffer[static_cast<size_t>(fbReadPos)];
+                    float feedbackSample = delayedSample * currentFeedbackAmount;
 
-                    // Store for output mixing (will be used in the mixing section)
-                    spectralDelayedWet[static_cast<size_t>(i)] = delayedSample;
-
-                    // Add feedback to input for cascading pitch shifts (controlled by FEEDBACK)
-                    if (currentFeedbackAmount > 0.01f)
+                    // Soft clip feedback for safety (tanh-style)
+                    if (std::abs(feedbackSample) > 0.95f)
                     {
-                        float feedbackSample = delayedSample * currentFeedbackAmount;
-
-                        // Soft clip feedback for safety (tanh-style)
-                        if (std::abs(feedbackSample) > 0.95f)
-                        {
-                            feedbackSample = std::tanh(feedbackSample);
-                        }
-
-                        inputSample += feedbackSample;
+                        feedbackSample = std::tanh(feedbackSample);
                     }
+
+                    inputSample += feedbackSample;
 
                     // DEBUG: Log feedback activity (once per second per channel)
                     static int debugCounter = 0;
@@ -1737,15 +1693,6 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
                     warmState[2] = warmOutput;
 
                     wetSample = warmOutput;
-                }
-
-                // MIX crossfades between direct wet and delayed wet (Spectral mode)
-                // At MIX=0%: 100% direct shifted signal
-                // At MIX=100%: 100% delayed signal (echoes only)
-                if (currentDelayEnabled)
-                {
-                    float delayedWetSample = spectralDelayedWet[static_cast<size_t>(i)];
-                    wetSample = wetSample * (1.0f - currentDelayMixAmount) + delayedWetSample * currentDelayMixAmount;
                 }
 
                 // Mix delayed dry with wet

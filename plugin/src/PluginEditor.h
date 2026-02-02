@@ -270,10 +270,6 @@ private:
     juce::Label delayDiffuseLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> delayDiffuseAttachment;
 
-    juce::Slider delayMixSlider;
-    juce::Label delayMixLabel;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> delayMixAttachment;
-
     // Stereo decorrelation toggle (testing feature)
     juce::ToggleButton stereoDecorrelateToggle;
 
