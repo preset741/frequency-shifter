@@ -58,7 +58,7 @@ juce_add_plugin(FrequencyShifter
     FORMATS AU VST3 AUv3 Standalone
 
     # Plugin name
-    PRODUCT_NAME "Frequency-shifter v80"
+    PRODUCT_NAME "Frequency-shifter v85"
 
     # Plugin characteristics
     IS_SYNTH FALSE

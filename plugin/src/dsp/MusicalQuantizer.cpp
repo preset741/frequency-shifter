@@ -208,6 +208,154 @@ static constexpr float ENVELOPE_BAND_CENTERS[48] = {
     3581.2f, 4135.6f, 4776.0f, 5515.7f, 6370.1f, 7356.8f, 8496.6f, 9812.3f, 11331.3f, 13085.9f, 15112.5f, 17453.4f  // 36-47
 };
 
+// Pre-computed log values for band centers (avoids log() calls in real-time)
+static constexpr float ENVELOPE_BAND_LOG_CENTERS[48] = {
+    2.996f, 3.140f, 3.285f, 3.427f, 3.572f, 3.716f, 3.861f, 4.005f, 4.150f, 4.293f, 4.438f, 4.582f,
+    4.727f, 4.871f, 5.015f, 5.158f, 5.303f, 5.447f, 5.591f, 5.735f, 5.879f, 6.023f, 6.167f, 6.312f,
+    6.456f, 6.600f, 6.744f, 6.888f, 7.032f, 7.176f, 7.320f, 7.464f, 7.607f, 7.752f, 7.896f, 8.040f,
+    8.184f, 8.328f, 8.472f, 8.616f, 8.759f, 8.903f, 9.048f, 9.191f, 9.336f, 9.479f, 9.624f, 9.768f
+};
+
+// ========== OPTIMIZED ENVELOPE FUNCTIONS ==========
+
+void MusicalQuantizer::buildEnvelopeLookupTables(double sampleRate, int fftSize) const
+{
+    // Skip if already built for these parameters
+    if (fftSize == cachedFftSizeForLookup && sampleRate == cachedSampleRateForLookup)
+        return;
+
+    cachedFftSizeForLookup = fftSize;
+    cachedSampleRateForLookup = sampleRate;
+
+    int numBins = fftSize / 2 + 1;
+    float binResolution = static_cast<float>(sampleRate) / static_cast<float>(fftSize);
+    float nyquist = static_cast<float>(sampleRate) / 2.0f;
+
+    // Build bin-to-band lookup table
+    binToBandLookup.resize(static_cast<size_t>(numBins));
+    for (int k = 0; k < numBins; ++k)
+    {
+        float binFreq = static_cast<float>(k) * binResolution;
+        if (binFreq < ENVELOPE_BAND_CENTERS[0] || binFreq >= nyquist)
+        {
+            binToBandLookup[static_cast<size_t>(k)] = -1;  // Invalid
+            continue;
+        }
+
+        // Find closest band using pre-computed log values
+        float logFreq = std::log(binFreq);
+        int closestBand = 0;
+        float minDist = std::abs(logFreq - ENVELOPE_BAND_LOG_CENTERS[0]);
+
+        for (int band = 1; band < NUM_ENVELOPE_BANDS; ++band)
+        {
+            if (ENVELOPE_BAND_CENTERS[band] >= nyquist)
+                break;
+            float dist = std::abs(logFreq - ENVELOPE_BAND_LOG_CENTERS[band]);
+            if (dist < minDist)
+            {
+                minDist = dist;
+                closestBand = band;
+            }
+        }
+        binToBandLookup[static_cast<size_t>(k)] = closestBand;
+    }
+
+    // Build band bin ranges for fast envelope capture
+    bandBinRanges.resize(NUM_ENVELOPE_BANDS);
+    for (int band = 0; band < NUM_ENVELOPE_BANDS; ++band)
+    {
+        float centerFreq = ENVELOPE_BAND_CENTERS[band];
+        if (centerFreq >= nyquist)
+        {
+            bandBinRanges[static_cast<size_t>(band)] = {-1, -1};
+            continue;
+        }
+
+        float lowFreq = centerFreq / 1.122f;
+        float highFreq = std::min(centerFreq * 1.122f, nyquist);
+
+        int lowBin = static_cast<int>(std::floor(lowFreq / binResolution));
+        int highBin = static_cast<int>(std::ceil(highFreq / binResolution));
+        lowBin = std::clamp(lowBin, 0, numBins - 1);
+        highBin = std::clamp(highBin, 0, numBins - 1);
+
+        bandBinRanges[static_cast<size_t>(band)] = {lowBin, highBin};
+    }
+}
+
+std::vector<float> MusicalQuantizer::captureSpectralEnvelopeFast(
+    const std::vector<float>& magnitude) const
+{
+    // OPTIMIZED: Uses pre-computed band bin ranges
+    std::vector<float> envelope(NUM_ENVELOPE_BANDS, 0.0f);
+
+    for (int band = 0; band < NUM_ENVELOPE_BANDS; ++band)
+    {
+        auto [lowBin, highBin] = bandBinRanges[static_cast<size_t>(band)];
+        if (lowBin < 0)
+            continue;
+
+        float sumSquares = 0.0f;
+        int binCount = 0;
+        for (int k = lowBin; k <= highBin; ++k)
+        {
+            float mag = magnitude[static_cast<size_t>(k)];
+            sumSquares += mag * mag;
+            binCount++;
+        }
+
+        if (binCount > 0)
+        {
+            envelope[static_cast<size_t>(band)] = std::sqrt(sumSquares / static_cast<float>(binCount));
+        }
+    }
+
+    return envelope;
+}
+
+void MusicalQuantizer::applySpectralEnvelopeFast(
+    std::vector<float>& magnitude,
+    const std::vector<float>& originalEnvelope,
+    const std::vector<float>& postEnvelope,
+    float preserveStrength) const
+{
+    // OPTIMIZED: Uses pre-computed bin-to-band lookup, no log() calls
+
+    float effectiveStrength = std::pow(preserveStrength, 0.7f);
+
+    // Simpler gain limits for stability
+    constexpr float minRatio = 0.25f;  // -12dB
+    constexpr float maxRatio = 4.0f;   // +12dB
+
+    int numBins = static_cast<int>(magnitude.size());
+
+    // Pre-compute ratios per band (48 divisions vs 2000+ bins)
+    float bandRatios[NUM_ENVELOPE_BANDS];
+    for (int band = 0; band < NUM_ENVELOPE_BANDS; ++band)
+    {
+        float originalVal = originalEnvelope[static_cast<size_t>(band)];
+        float postVal = postEnvelope[static_cast<size_t>(band)];
+
+        if (postVal < ENVELOPE_FLOOR) postVal = ENVELOPE_FLOOR;
+        if (originalVal < ENVELOPE_FLOOR) originalVal = ENVELOPE_FLOOR;
+
+        float ratio = originalVal / postVal;
+        ratio = std::clamp(ratio, minRatio, maxRatio);
+        bandRatios[band] = 1.0f + effectiveStrength * (ratio - 1.0f);
+    }
+
+    // Apply ratios using lookup table (single loop, no nested search)
+    for (int k = 1; k < numBins; ++k)
+    {
+        int band = binToBandLookup[static_cast<size_t>(k)];
+        if (band >= 0)
+        {
+            magnitude[static_cast<size_t>(k)] *= bandRatios[band];
+        }
+    }
+}
+
 std::vector<float> MusicalQuantizer::captureSpectralEnvelope(
     const std::vector<float>& magnitude,
     double sampleRate,
@@ -591,21 +739,18 @@ std::pair<std::vector<float>, std::vector<float>> MusicalQuantizer::quantizeSpec
         }
     }
 
-    // Phase 2B+ Enhanced: Apply spectral envelope preservation
-    // Use high-resolution envelope (96 bands) when PRESERVE > 75% for tighter matching
+    // Phase 2B+ OPTIMIZED: Apply spectral envelope preservation
+    // Uses pre-computed lookup tables to avoid expensive log() calls
     if (preserveAmount > 0.0f && !originalEnvelope.empty())
     {
-        if (preserveAmount > 0.75f)
-        {
-            // High resolution mode: recapture at higher resolution and apply
-            std::vector<float> hiResOriginal = captureSpectralEnvelopeHighRes(magnitude, sampleRate, fftSize);
-            applySpectralEnvelopeHighRes(quantizedMagnitude, hiResOriginal, sampleRate, fftSize, preserveAmount);
-        }
-        else
-        {
-            // Standard resolution mode
-            applySpectralEnvelope(quantizedMagnitude, originalEnvelope, sampleRate, fftSize, preserveAmount);
-        }
+        // Build lookup tables if needed (only when FFT size or sample rate changes)
+        buildEnvelopeLookupTables(sampleRate, fftSize);
+
+        // Capture post-quantization envelope using fast method
+        std::vector<float> postEnvelope = captureSpectralEnvelopeFast(quantizedMagnitude);
+
+        // Apply envelope correction using fast method (single lookup per bin)
+        applySpectralEnvelopeFast(quantizedMagnitude, originalEnvelope, postEnvelope, preserveAmount);
     }
 
     // Phase 2A.3: Phase continuity with magnitude gating and decay
@@ -749,146 +894,6 @@ std::vector<float> MusicalQuantizer::getScaleFrequencies(float minFreq, float ma
     }
 
     return frequencies;
-}
-
-// Phase 2B+ High-resolution (96 bands) envelope band centers
-// For PRESERVE > 75%, using ~1/10 octave resolution for tighter spectral matching
-// Geometrically spaced: f[i] = 20 * (20000/20)^(i/95) = 20 * 1000^(i/95)
-static constexpr float ENVELOPE_BAND_CENTERS_HIGH_RES[96] = {
-    // Bands 0-23: 20-120 Hz
-    20.0f, 21.5f, 23.1f, 24.8f, 26.7f, 28.7f, 30.8f, 33.1f, 35.6f, 38.3f, 41.1f, 44.2f,
-    47.5f, 51.1f, 54.9f, 59.0f, 63.4f, 68.1f, 73.2f, 78.7f, 84.6f, 90.9f, 97.7f, 105.0f,
-    // Bands 24-47: 113-640 Hz
-    112.9f, 121.3f, 130.4f, 140.1f, 150.6f, 161.9f, 173.9f, 186.9f, 200.9f, 215.9f, 232.0f, 249.4f,
-    268.0f, 288.1f, 309.5f, 332.7f, 357.5f, 384.3f, 412.9f, 443.7f, 476.8f, 512.5f, 550.7f, 591.9f,
-    // Bands 48-71: 636-3600 Hz
-    636.0f, 683.5f, 734.6f, 789.5f, 848.4f, 911.7f, 979.8f, 1053.0f, 1131.5f, 1216.2f, 1306.8f, 1404.3f,
-    1509.2f, 1621.9f, 1743.1f, 1873.3f, 2013.2f, 2163.6f, 2325.0f, 2498.5f, 2685.2f, 2886.0f, 3101.2f, 3332.2f,
-    // Bands 72-95: 3580-20000 Hz
-    3580.0f, 3847.3f, 4135.4f, 4445.0f, 4777.8f, 5135.3f, 5519.6f, 5932.4f, 6376.1f, 6853.0f, 7365.7f, 7917.0f,
-    8509.7f, 9147.0f, 9832.0f, 10568.0f, 11358.9f, 12208.5f, 13121.0f, 14101.0f, 15153.0f, 16282.4f, 17494.8f, 18796.0f
-};
-
-std::vector<float> MusicalQuantizer::captureSpectralEnvelopeHighRes(
-    const std::vector<float>& magnitude,
-    double sampleRate,
-    int fftSize) const
-{
-    // High-resolution envelope capture (~1/10 octave resolution)
-    // Uses 96 bands for tighter spectral matching when PRESERVE > 75%
-
-    std::vector<float> envelope(NUM_ENVELOPE_BANDS_HIGH_RES, 0.0f);
-    int numBins = static_cast<int>(magnitude.size());
-    float binResolution = static_cast<float>(sampleRate) / static_cast<float>(fftSize);
-    float nyquist = static_cast<float>(sampleRate) / 2.0f;
-
-    for (int band = 0; band < NUM_ENVELOPE_BANDS_HIGH_RES; ++band)
-    {
-        float centerFreq = ENVELOPE_BAND_CENTERS_HIGH_RES[band];
-        if (centerFreq >= nyquist)
-            break;
-
-        // ~1/10 octave bandwidth: factor of 2^(1/10) ≈ 1.072
-        float lowFreq = centerFreq / 1.072f;
-        float highFreq = centerFreq * 1.072f;
-
-        // Clamp to nyquist
-        highFreq = std::min(highFreq, nyquist);
-
-        // Convert to bin indices
-        int lowBin = static_cast<int>(std::floor(lowFreq / binResolution));
-        int highBin = static_cast<int>(std::ceil(highFreq / binResolution));
-        lowBin = std::clamp(lowBin, 0, numBins - 1);
-        highBin = std::clamp(highBin, 0, numBins - 1);
-
-        // Calculate RMS energy in this band
-        float sumSquares = 0.0f;
-        int binCount = 0;
-        for (int k = lowBin; k <= highBin; ++k)
-        {
-            float mag = magnitude[static_cast<size_t>(k)];
-            sumSquares += mag * mag;
-            binCount++;
-        }
-
-        if (binCount > 0)
-        {
-            envelope[static_cast<size_t>(band)] = std::sqrt(sumSquares / static_cast<float>(binCount));
-        }
-    }
-
-    return envelope;
-}
-
-void MusicalQuantizer::applySpectralEnvelopeHighRes(
-    std::vector<float>& magnitude,
-    const std::vector<float>& originalEnvelope,
-    double sampleRate,
-    int fftSize,
-    float preserveStrength) const
-{
-    // High-resolution envelope application for PRESERVE > 75%
-    // Uses 96 bands for tighter spectral matching
-
-    if (preserveStrength <= 0.0f)
-        return;
-
-    // Non-linear scaling: make top end more aggressive
-    float effectiveStrength = std::pow(preserveStrength, 0.7f);
-
-    // At high preserve (> 75%), use very wide clamp range (nearly unclamped)
-    // Map 75%-100% to ±36dB to ±60dB
-    float clampDb = 36.0f + ((preserveStrength - 0.75f) / 0.25f) * 24.0f;  // 36 to 60 dB
-    float minRatio = std::pow(10.0f, -clampDb / 20.0f);
-    float maxRatio = std::pow(10.0f, clampDb / 20.0f);
-
-    int numBins = static_cast<int>(magnitude.size());
-    float binResolution = static_cast<float>(sampleRate) / static_cast<float>(fftSize);
-    float nyquist = static_cast<float>(sampleRate) / 2.0f;
-
-    // Capture post-quantization envelope at high resolution
-    std::vector<float> postEnvelope = captureSpectralEnvelopeHighRes(magnitude, sampleRate, fftSize);
-
-    // Apply correction per bin
-    for (int k = 1; k < numBins; ++k)
-    {
-        float binFreq = static_cast<float>(k) * binResolution;
-        if (binFreq >= nyquist || binFreq < ENVELOPE_BAND_CENTERS_HIGH_RES[0])
-            continue;
-
-        // Find closest band using log-frequency lookup
-        float logFreq = std::log(binFreq);
-        int closestBand = 0;
-        float minDist = std::abs(logFreq - std::log(ENVELOPE_BAND_CENTERS_HIGH_RES[0]));
-
-        for (int band = 1; band < NUM_ENVELOPE_BANDS_HIGH_RES; ++band)
-        {
-            if (ENVELOPE_BAND_CENTERS_HIGH_RES[band] >= nyquist)
-                break;
-            float dist = std::abs(logFreq - std::log(ENVELOPE_BAND_CENTERS_HIGH_RES[band]));
-            if (dist < minDist)
-            {
-                minDist = dist;
-                closestBand = band;
-            }
-        }
-
-        // Calculate correction ratio
-        float originalVal = originalEnvelope[static_cast<size_t>(closestBand)];
-        float postVal = postEnvelope[static_cast<size_t>(closestBand)];
-
-        if (postVal < ENVELOPE_FLOOR)
-            postVal = ENVELOPE_FLOOR;
-        if (originalVal < ENVELOPE_FLOOR)
-            originalVal = ENVELOPE_FLOOR;
-
-        float ratio = originalVal / postVal;
-        ratio = std::clamp(ratio, minRatio, maxRatio);
-
-        // Apply with non-linear effective strength
-        float blendedRatio = 1.0f + effectiveStrength * (ratio - 1.0f);
-        magnitude[static_cast<size_t>(k)] *= blendedRatio;
-    }
 }
 
 } // namespace fshift

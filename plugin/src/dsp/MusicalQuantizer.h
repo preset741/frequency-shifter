@@ -113,12 +113,19 @@ public:
      * Capture spectral envelope from magnitude spectrum.
      * Call this on the INPUT signal BEFORE shift/quantization.
      * Pass the result to quantizeSpectrum's preShiftEnvelope parameter.
+     * OPTIMIZED: Uses pre-computed lookup tables when available.
      */
     std::vector<float> getSpectralEnvelope(
         const std::vector<float>& magnitude,
         double sampleRate,
         int fftSize) const
     {
+        // Build lookup tables if needed
+        buildEnvelopeLookupTables(sampleRate, fftSize);
+        // Use fast method if tables are ready
+        if (!bandBinRanges.empty())
+            return captureSpectralEnvelopeFast(magnitude);
+        // Fallback to original method
         return captureSpectralEnvelope(magnitude, sampleRate, fftSize);
     }
 
@@ -257,27 +264,42 @@ private:
 
     // Spectral envelope band parameters
     // Standard resolution: 48 bands at ~1/5 octave resolution
-    // High resolution: 96 bands at ~1/10 octave resolution (used at PRESERVE > 75%)
     static constexpr int NUM_ENVELOPE_BANDS = 48;
-    static constexpr int NUM_ENVELOPE_BANDS_HIGH_RES = 96;
+
+    // ========== CPU OPTIMIZATION: Pre-computed lookup tables ==========
+    // These avoid expensive std::log() calls in the real-time audio path
+
+    // Cached FFT parameters for lookup table validity
+    mutable int cachedFftSizeForLookup = 0;
+    mutable double cachedSampleRateForLookup = 0.0;
+
+    // Pre-computed bin-to-band mapping (avoids nested loop with log calls)
+    // Index = bin number, Value = closest envelope band index
+    mutable std::vector<int> binToBandLookup;
+
+    // Pre-computed band bin ranges for envelope capture
+    // Each pair is (lowBin, highBin) for that band
+    mutable std::vector<std::pair<int, int>> bandBinRanges;
 
     /**
-     * Phase 2B+ High-resolution envelope capture for PRESERVE > 75%.
-     * Uses 96 bands (~1/10 octave) for tighter spectral matching.
+     * Build lookup tables for current FFT size / sample rate.
+     * Called once when parameters change, not every frame.
      */
-    std::vector<float> captureSpectralEnvelopeHighRes(
-        const std::vector<float>& magnitude,
-        double sampleRate,
-        int fftSize) const;
+    void buildEnvelopeLookupTables(double sampleRate, int fftSize) const;
 
     /**
-     * Phase 2B+ Apply high-resolution spectral envelope.
+     * Optimized envelope capture using pre-computed lookup tables.
      */
-    void applySpectralEnvelopeHighRes(
+    std::vector<float> captureSpectralEnvelopeFast(
+        const std::vector<float>& magnitude) const;
+
+    /**
+     * Optimized envelope application using pre-computed lookup tables.
+     */
+    void applySpectralEnvelopeFast(
         std::vector<float>& magnitude,
         const std::vector<float>& originalEnvelope,
-        double sampleRate,
-        int fftSize,
+        const std::vector<float>& postEnvelope,
         float preserveStrength) const;
 };
 

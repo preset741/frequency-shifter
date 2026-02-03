@@ -718,51 +718,48 @@ void FrequencyShifterProcessor::getBlendParameters(float smearMsValue, int& fftS
     // Convert ms to samples
     float targetSamples = smearMsValue * static_cast<float>(currentSampleRate) / 1000.0f;
 
-    // Find which two FFT sizes we're between
-    fftSize1 = FFT_SIZES[0];
-    fftSize2 = FFT_SIZES[0];
-    crossfade = 0.0f;
+    // OPTIMIZATION: Always snap to nearest FFT size instead of crossfading between two
+    // This halves CPU usage by only running ONE FFT processor instead of two
+    // Previous approach ran dual processors when SMEAR was between FFT size boundaries,
+    // causing 40%+ CPU usage in the 50-90ms range
 
-    for (int i = 0; i < NUM_FFT_SIZES - 1; ++i)
+    // Find the closest FFT size
+    int closestSize = FFT_SIZES[0];
+    float closestDistance = std::abs(targetSamples - static_cast<float>(FFT_SIZES[0]));
+
+    for (int i = 1; i < NUM_FFT_SIZES; ++i)
     {
-        float lowSize = static_cast<float>(FFT_SIZES[i]);
-        float highSize = static_cast<float>(FFT_SIZES[i + 1]);
-
-        if (targetSamples >= lowSize && targetSamples <= highSize)
+        float distance = std::abs(targetSamples - static_cast<float>(FFT_SIZES[i]));
+        if (distance < closestDistance)
         {
-            fftSize1 = FFT_SIZES[i];
-            fftSize2 = FFT_SIZES[i + 1];
-            // Linear interpolation between sizes
-            crossfade = (targetSamples - lowSize) / (highSize - lowSize);
-            return;
+            closestDistance = distance;
+            closestSize = FFT_SIZES[i];
         }
     }
 
-    // If we're at or above the max, use the largest size
-    if (targetSamples >= FFT_SIZES[NUM_FFT_SIZES - 1])
-    {
-        fftSize1 = FFT_SIZES[NUM_FFT_SIZES - 1];
-        fftSize2 = FFT_SIZES[NUM_FFT_SIZES - 1];
-        crossfade = 0.0f;
-    }
+    // Use same size for both processors (forces single processor mode)
+    fftSize1 = closestSize;
+    fftSize2 = closestSize;
+    crossfade = 0.0f;
 }
 
 void FrequencyShifterProcessor::reinitializeDsp()
 {
-    // Get the two FFT sizes we need based on SMEAR setting
+    // Get FFT size based on SMEAR setting (always snaps to nearest valid size)
     float smear = smearMs.load();
     int fftSize1, fftSize2;
     float crossfade;
     getBlendParameters(smear, fftSize1, fftSize2, crossfade);
 
     currentFftSizes[0] = fftSize1;
-    currentFftSizes[1] = fftSize2;
+    currentFftSizes[1] = fftSize2;  // Same as fftSize1 after optimization
     currentHopSizes[0] = fftSize1 / 4;  // Standard 75% overlap
     currentHopSizes[1] = fftSize2 / 4;
-    currentCrossfade = crossfade;
+    currentCrossfade = crossfade;  // Always 0.0 after optimization
 
-    // If crossfade is very close to 0 or 1, use single processor mode
-    useSingleProcessor = (crossfade < 0.01f || crossfade > 0.99f || fftSize1 == fftSize2);
+    // OPTIMIZATION: Always single processor mode now (getBlendParameters sets fftSize1==fftSize2)
+    // This halves CPU usage compared to dual-processor crossfade approach
+    useSingleProcessor = true;
 
     const int numChannels = getTotalNumInputChannels();
 
