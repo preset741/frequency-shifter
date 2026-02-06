@@ -6,10 +6,15 @@
 namespace fshift {
 
 /**
- * HilbertShifter - Classic SSB/Hilbert frequency shifter.
+ * HilbertShifter - Classic SSB/Hilbert frequency shifter with double-precision processing.
  *
  * Uses allpass filter networks to create quadrature signals (I/Q with 90° phase difference),
  * then applies single sideband modulation for frequency shifting.
+ *
+ * v95: Upgraded to double precision for allpass filter states and internal processing.
+ * This prevents quantization error accumulation in deep feedback loops, which was causing
+ * the "digital distortion" artifacts. Double precision maintains phase accuracy through
+ * hundreds of feedback iterations.
  *
  * Advantages over spectral methods:
  * - Zero latency (aside from filter group delay ~10-20 samples)
@@ -36,13 +41,13 @@ public:
 
     void reset()
     {
-        // Reset allpass filter states for all channels
+        // Reset allpass filter states for all channels (double precision)
         for (int ch = 0; ch < MAX_CHANNELS; ++ch)
         {
             for (auto& state : allpassStatesI[ch])
-                state = 0.0f;
+                state = 0.0;
             for (auto& state : allpassStatesQ[ch])
-                state = 0.0f;
+                state = 0.0;
         }
 
         // Reset oscillator
@@ -80,17 +85,18 @@ public:
         (void)channel;  // Suppress unused parameter warning
 
         // Generate quadrature signals using Hilbert transform (allpass networks)
-        float I = processAllpassChainI(input, 0);
-        float Q = processAllpassChainQ(input, 0);
+        // Uses double precision internally for accurate feedback loops
+        double I = processAllpassChainI(static_cast<double>(input), 0);
+        double Q = processAllpassChainQ(static_cast<double>(input), 0);
 
-        // Generate quadrature oscillator signals
-        float cosOsc = static_cast<float>(std::cos(oscPhase));
-        float sinOsc = static_cast<float>(std::sin(oscPhase));
+        // Generate quadrature oscillator signals (already double precision)
+        double cosOsc = std::cos(oscPhase);
+        double sinOsc = std::sin(oscPhase);
 
-        // Single sideband modulation
+        // Single sideband modulation (double precision)
         // Upper sideband (shift up): I * cos - Q * sin
         // Lower sideband (shift down): I * cos + Q * sin
-        float output;
+        double output;
         if (shiftHz >= 0.0f)
             output = I * cosOsc - Q * sinOsc;  // Upper sideband
         else
@@ -108,7 +114,7 @@ public:
         while (oscPhase < 0.0)
             oscPhase += 2.0 * M_PI;
 
-        return output;
+        return static_cast<float>(output);
     }
 
     /**
@@ -122,48 +128,52 @@ private:
     float shiftHz = 0.0f;
     double oscPhase = 0.0;
 
-    // Allpass filter coefficients for Hilbert transform
+    // Allpass filter coefficients for Hilbert transform (stored as double for precision)
     // These coefficients are designed to create ~90° phase difference
     // between the I and Q outputs across 20Hz-20kHz at 44.1kHz sample rate.
     // Based on Olli Niemitalo's Hilbert transformer design.
 
     // Chain I coefficients (phase reference)
-    static constexpr std::array<float, 6> coeffsI = {
-        0.4021921162426f,
-        0.8561710882420f,
-        0.9722909545651f,
-        0.9952884791278f,
-        0.9990657381831f,
-        0.9998766533010f
+    static constexpr std::array<double, 6> coeffsI = {
+        0.4021921162426,
+        0.8561710882420,
+        0.9722909545651,
+        0.9952884791278,
+        0.9990657381831,
+        0.9998766533010
     };
 
     // Chain Q coefficients (90° shifted)
-    static constexpr std::array<float, 6> coeffsQ = {
-        0.1684919243525f,
-        0.7024051466406f,
-        0.9351665954634f,
-        0.9862259517082f,
-        0.9979710606470f,
-        0.9997089053332f
+    static constexpr std::array<double, 6> coeffsQ = {
+        0.1684919243525,
+        0.7024051466406,
+        0.9351665954634,
+        0.9862259517082,
+        0.9979710606470,
+        0.9997089053332
     };
 
-    // Allpass filter states - per channel for independent stereo processing
+    // Allpass filter states - DOUBLE PRECISION for accurate feedback loops
+    // This prevents quantization error accumulation that causes distortion
     static constexpr int MAX_CHANNELS = 2;
-    std::array<std::array<float, 6>, MAX_CHANNELS> allpassStatesI = {};
-    std::array<std::array<float, 6>, MAX_CHANNELS> allpassStatesQ = {};
+    std::array<std::array<double, 6>, MAX_CHANNELS> allpassStatesI = {};
+    std::array<std::array<double, 6>, MAX_CHANNELS> allpassStatesQ = {};
 
     /**
      * Process through the I-channel allpass chain for a specific channel.
      * First-order allpass transfer function: H(z) = (a + z^-1) / (1 + a*z^-1)
      * Direct form: y[n] = a * x[n] + state; state = x[n] - a * y[n]
+     *
+     * Uses double precision throughout to prevent quantization errors
+     * from accumulating in deep feedback loops.
      */
-    float processAllpassChainI(float input, int channel)
+    double processAllpassChainI(double input, int channel)
     {
-        float x = input;
+        double x = input;
         for (size_t i = 0; i < coeffsI.size(); ++i)
         {
-            float a = coeffsI[i];
-            float output = a * x + allpassStatesI[channel][i];
+            double a = coeffsI[i];
+            double output = a * x + allpassStatesI[channel][i];
             allpassStatesI[channel][i] = x - a * output;
             x = output;
         }
@@ -172,14 +182,15 @@ private:
 
     /**
      * Process through the Q-channel allpass chain for a specific channel.
+     * Uses double precision throughout.
      */
-    float processAllpassChainQ(float input, int channel)
+    double processAllpassChainQ(double input, int channel)
     {
-        float x = input;
+        double x = input;
         for (size_t i = 0; i < coeffsQ.size(); ++i)
         {
-            float a = coeffsQ[i];
-            float output = a * x + allpassStatesQ[channel][i];
+            double a = coeffsQ[i];
+            double output = a * x + allpassStatesQ[channel][i];
             allpassStatesQ[channel][i] = x - a * output;
             x = output;
         }

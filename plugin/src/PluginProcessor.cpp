@@ -866,10 +866,10 @@ void FrequencyShifterProcessor::reinitializeDsp()
         }
     }
 
-    // Calculate highpass filter coefficients (80Hz, Q=0.707, Butterworth)
-    // This prevents low frequency buildup in the feedback loop
+    // Calculate highpass filter coefficients (150Hz, Q=0.707, Butterworth)
+    // This prevents low frequency "thumping" buildup in the feedback loop
     {
-        const float hpfCutoff = 80.0f;
+        const float hpfCutoff = 150.0f;  // Raised from 80Hz for Orville-style behavior
         const float Q = 0.707f;
         const float omega = 2.0f * static_cast<float>(M_PI) * hpfCutoff / static_cast<float>(currentSampleRate);
         const float sinOmega = std::sin(omega);
@@ -887,6 +887,77 @@ void FrequencyShifterProcessor::reinitializeDsp()
         for (int ch = 0; ch < MAX_CHANNELS; ++ch)
         {
             feedbackHpfState[static_cast<size_t>(ch)].fill(0.0f);
+        }
+    }
+
+    // Calculate 4-pole lowpass filter coefficients (~4kHz, 24dB/oct Linkwitz-Riley)
+    // This aggressive filtering is essential for clean Hilbert feedback cascading
+    // Lower cutoff (4kHz vs 7kHz) prevents aliased harmonics from building up
+    // Two cascaded biquads give 24dB/oct slope for effective alias suppression
+    {
+        const float lpfCutoff = 4000.0f;  // 4kHz - darker but cleaner feedback
+        const float Q = 0.707f;  // Butterworth Q for each stage (cascaded = Linkwitz-Riley)
+        const float omega = 2.0f * static_cast<float>(M_PI) * lpfCutoff / static_cast<float>(currentSampleRate);
+        const float sinOmega = std::sin(omega);
+        const float cosOmega = std::cos(omega);
+        const float alpha = sinOmega / (2.0f * Q);
+
+        const float a0 = 1.0f + alpha;
+        feedbackLpfCoeffs[0] = ((1.0f - cosOmega) / 2.0f) / a0;  // b0
+        feedbackLpfCoeffs[1] = (1.0f - cosOmega) / a0;            // b1
+        feedbackLpfCoeffs[2] = ((1.0f - cosOmega) / 2.0f) / a0;  // b2
+        feedbackLpfCoeffs[3] = -(-2.0f * cosOmega) / a0;          // -a1 (negated for direct form)
+        feedbackLpfCoeffs[4] = -(1.0f - alpha) / a0;              // -a2 (negated for direct form)
+
+        // Reset both LPF stages
+        for (int ch = 0; ch < MAX_CHANNELS; ++ch)
+        {
+            feedbackLpf1State[static_cast<size_t>(ch)].fill(0.0f);
+            feedbackLpf2State[static_cast<size_t>(ch)].fill(0.0f);
+        }
+    }
+
+    // Reset cross-coupled feedback and drift LFO
+    crossFeedbackSample.fill(0.0f);
+    driftLfoPhase = 0.0;
+
+    // Calculate Eventide-style 4th order Butterworth LPF coefficients for feedback filtering
+    // 4th order = 2 cascaded 2nd order sections for 48 dB/oct slope
+    // This provides steep anti-aliasing to clean up sideband leakage before feedback
+    {
+        const float fbLpfCutoff = 12000.0f;  // 12kHz cutoff for feedback path
+        const float omega = 2.0f * static_cast<float>(M_PI) * fbLpfCutoff / static_cast<float>(currentSampleRate);
+        const float sinOmega = std::sin(omega);
+        const float cosOmega = std::cos(omega);
+
+        // 4th order Butterworth has two stages with specific Q values
+        // Q1 = 0.541 (first stage), Q2 = 1.307 (second stage)
+        const float Q1 = 0.5412f;
+        const float Q2 = 1.3065f;
+
+        // First biquad section (Q1)
+        float alpha1 = sinOmega / (2.0f * Q1);
+        float a0_1 = 1.0f + alpha1;
+        classicFbLpfCoeffs[0] = ((1.0f - cosOmega) / 2.0f) / a0_1;  // b0
+        classicFbLpfCoeffs[1] = (1.0f - cosOmega) / a0_1;            // b1
+        classicFbLpfCoeffs[2] = ((1.0f - cosOmega) / 2.0f) / a0_1;  // b2
+        classicFbLpfCoeffs[3] = -(-2.0f * cosOmega) / a0_1;          // -a1
+        classicFbLpfCoeffs[4] = -(1.0f - alpha1) / a0_1;             // -a2
+
+        // Second biquad section (Q2)
+        float alpha2 = sinOmega / (2.0f * Q2);
+        float a0_2 = 1.0f + alpha2;
+        classicFbLpfCoeffs[5] = ((1.0f - cosOmega) / 2.0f) / a0_2;  // b0
+        classicFbLpfCoeffs[6] = (1.0f - cosOmega) / a0_2;            // b1
+        classicFbLpfCoeffs[7] = ((1.0f - cosOmega) / 2.0f) / a0_2;  // b2
+        classicFbLpfCoeffs[8] = -(-2.0f * cosOmega) / a0_2;          // -a1
+        classicFbLpfCoeffs[9] = -(1.0f - alpha2) / a0_2;             // -a2
+
+        // Reset Eventide-style feedback filter states
+        for (int ch = 0; ch < MAX_CHANNELS; ++ch)
+        {
+            classicDcBlockState[static_cast<size_t>(ch)] = 0.0f;
+            classicFbLpfState[static_cast<size_t>(ch)].fill(0.0f);
         }
     }
 
@@ -1222,7 +1293,8 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
         std::vector<float> proc1Output(static_cast<size_t>(numSamples), 0.0f);
 
         // === CLASSIC MODE PROCESSING ===
-        // Uses Hilbert transform for near-zero latency frequency shifting
+        // Eventide-style Hilbert frequency shifter with precision-filtered feedback
+        // Uses IIR allpass Hilbert transform with DC blocking + 4th order LPF for clean cascading
         if (useClassicMode || switching)
         {
             auto& hilbert = hilbertShifters[static_cast<size_t>(channel)];
@@ -1232,7 +1304,7 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
             {
                 float inputSample = drySignal[static_cast<size_t>(i)];
 
-                // Add feedback from delay buffer for cascading pitch shifts
+                // Add feedback from delay buffer for cascading/cumulative pitch shifts (barber-pole effect)
                 if (currentDelayEnabled && currentFeedbackAmount > 0.01f)
                 {
                     auto& fbBuffer = feedbackBuffers[static_cast<size_t>(channel)];
@@ -1245,11 +1317,11 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
                     int minDelaySamples = static_cast<int>(10.0f * currentSampleRate / 1000.0f);
                     delaySamples = std::clamp(delaySamples, minDelaySamples, fbBufSize - 1);
 
-                    // Read from feedback buffer
+                    // Read from own channel feedback buffer
                     int fbReadPos = (feedbackWritePos[static_cast<size_t>(channel)] - delaySamples + fbBufSize) % fbBufSize;
                     float feedbackSample = fbBuffer[static_cast<size_t>(fbReadPos)] * currentFeedbackAmount;
 
-                    // Soft clip feedback for safety
+                    // Soft clip feedback on read for safety
                     if (std::abs(feedbackSample) > 0.95f)
                     {
                         feedbackSample = std::tanh(feedbackSample);
@@ -1258,45 +1330,77 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
                     inputSample += feedbackSample;
                 }
 
-                // Apply Hilbert transform frequency shift
+                // Apply Hilbert transform frequency shift (feedback goes through for cumulative shifts)
                 float shiftedSample = hilbert.process(inputSample, channel);
 
-                // Write to feedback buffer (with HPF and damping) - only in Classic mode when not switching
-                // During switch, Spectral mode handles feedback writes
+                // === EVENTIDE-STYLE FEEDBACK FILTERING ===
+                // Write to feedback buffer with precision filtering to clean up sideband leakage
                 if (currentDelayEnabled && !switching)
                 {
                     auto& fbBuffer = feedbackBuffers[static_cast<size_t>(channel)];
                     int fbBufSize = static_cast<int>(fbBuffer.size());
 
-                    // Apply HPF (80Hz) to prevent low frequency buildup
-                    auto& hpfState = feedbackHpfState[static_cast<size_t>(channel)];
-                    float x0 = shiftedSample;
-                    float x1 = hpfState[0];
-                    float x2 = hpfState[1];
-                    float y1 = hpfState[2];
-                    float y2 = hpfState[3];
+                    float toBuffer = shiftedSample;
 
-                    float hpfOutput = feedbackHpfCoeffs[0] * x0
-                                    + feedbackHpfCoeffs[1] * x1
-                                    + feedbackHpfCoeffs[2] * x2
-                                    + feedbackHpfCoeffs[3] * y1
-                                    + feedbackHpfCoeffs[4] * y2;
+                    // 1. DC Blocker (1st order HPF at ~10Hz)
+                    // Removes DC offset that accumulates from imperfect sideband cancellation
+                    float& dcState = classicDcBlockState[static_cast<size_t>(channel)];
+                    float dcBlocked = toBuffer - dcState;
+                    dcState += dcBlocked * 0.0005f;  // ~10Hz at 44.1kHz (1 - 0.9995)
+                    toBuffer = dcBlocked;
 
-                    hpfState[1] = x1;
-                    hpfState[0] = x0;
-                    hpfState[3] = y1;
-                    hpfState[2] = hpfOutput;
+                    // 2. Steep Anti-aliasing LPF (4th order Butterworth at 12kHz)
+                    // Suppresses high-frequency artifacts from sideband leakage
+                    auto& lpfState = classicFbLpfState[static_cast<size_t>(channel)];
 
-                    // Apply damping filter (one-pole lowpass)
-                    float& lpfState = feedbackFilterState[static_cast<size_t>(channel)];
-                    lpfState = hpfOutput + feedbackFilterCoeff * (lpfState - hpfOutput);
+                    // First biquad section
+                    float x0 = toBuffer;
+                    float x1 = lpfState[0];
+                    float x2 = lpfState[1];
+                    float y1 = lpfState[2];
+                    float y2 = lpfState[3];
+
+                    float filtered1 = classicFbLpfCoeffs[0] * x0
+                                    + classicFbLpfCoeffs[1] * x1
+                                    + classicFbLpfCoeffs[2] * x2
+                                    + classicFbLpfCoeffs[3] * y1
+                                    + classicFbLpfCoeffs[4] * y2;
+
+                    lpfState[0] = x0;
+                    lpfState[1] = x1;
+                    lpfState[2] = filtered1;
+                    lpfState[3] = y1;
+
+                    // Second biquad section (cascaded for 4th order)
+                    x0 = filtered1;
+                    x1 = lpfState[4];
+                    x2 = lpfState[5];
+                    y1 = lpfState[6];
+                    y2 = lpfState[7];
+
+                    float filtered2 = classicFbLpfCoeffs[5] * x0
+                                    + classicFbLpfCoeffs[6] * x1
+                                    + classicFbLpfCoeffs[7] * x2
+                                    + classicFbLpfCoeffs[8] * y1
+                                    + classicFbLpfCoeffs[9] * y2;
+
+                    lpfState[4] = x0;
+                    lpfState[5] = x1;
+                    lpfState[6] = filtered2;
+                    lpfState[7] = y1;
+
+                    toBuffer = filtered2;
+
+                    // 3. Soft limiter to prevent runaway
+                    if (std::abs(toBuffer) > 0.95f)
+                        toBuffer = std::tanh(toBuffer);
 
                     // Write to feedback buffer
-                    fbBuffer[static_cast<size_t>(feedbackWritePos[static_cast<size_t>(channel)])] = lpfState;
+                    fbBuffer[static_cast<size_t>(feedbackWritePos[static_cast<size_t>(channel)])] = toBuffer;
                     feedbackWritePos[static_cast<size_t>(channel)] = (feedbackWritePos[static_cast<size_t>(channel)] + 1) % fbBufSize;
                 }
 
-                // Output is always the direct shifted signal (feedback creates cascading effect in input)
+                // Output is the shifted signal (feedback creates cascading barber-pole effect)
                 classicOutput[static_cast<size_t>(i)] = shiftedSample;
             }
         }
@@ -1814,6 +1918,12 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
             leftChannel[i] = delayedSample;
         }
     }
+
+    // Advance drift LFO phase for next block (Orville-style organic movement)
+    // This creates slow ~0.2Hz modulation on Classic mode shift frequency
+    driftLfoPhase += (DRIFT_LFO_RATE / currentSampleRate) * static_cast<double>(numSamples);
+    if (driftLfoPhase >= 1.0)
+        driftLfoPhase -= 1.0;
 }
 
 int FrequencyShifterProcessor::getLatencySamples() const

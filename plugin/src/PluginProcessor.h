@@ -319,11 +319,34 @@ private:
     std::array<float, MAX_CHANNELS> feedbackFilterState{};
     float feedbackFilterCoeff = 0.5f;  // Calculated from damping parameter
 
-    // Two-pole highpass filter (80Hz) to prevent low frequency buildup
+    // Two-pole highpass filter (150Hz) to prevent low frequency buildup
     // Biquad state: [x1, x2, y1, y2] per channel
     std::array<std::array<float, 4>, MAX_CHANNELS> feedbackHpfState{};
     // Biquad coefficients: [b0, b1, b2, a1, a2] (a0 normalized to 1)
     std::array<float, 5> feedbackHpfCoeffs{};
+
+    // 4-pole (24dB/oct) lowpass filter (~4kHz) for Classic mode feedback
+    // Aggressive filtering prevents aliasing artifacts from accumulating in delay taps
+    // Two cascaded biquad stages for steeper rolloff (Eventide H3000/Orville style)
+    std::array<std::array<float, 4>, MAX_CHANNELS> feedbackLpf1State{};  // First biquad
+    std::array<std::array<float, 4>, MAX_CHANNELS> feedbackLpf2State{};  // Second biquad
+    std::array<float, 5> feedbackLpfCoeffs{};  // Shared coefficients for both stages
+
+    // Cross-coupled feedback for Classic mode (L→R, R→L)
+    // Creates complex interference and stereo width like Eventide Orville
+    std::array<float, MAX_CHANNELS> crossFeedbackSample{};
+
+    // Drift LFO for Classic mode - subtle modulation keeps feedback alive
+    double driftLfoPhase = 0.0;
+    static constexpr float DRIFT_LFO_RATE = 0.2f;   // ~0.2Hz for slow organic movement
+    static constexpr float DRIFT_LFO_DEPTH = 0.5f;  // ~0.5Hz variation
+
+    // Eventide-style feedback filters for Classic mode
+    // DC blocker removes offset accumulation from imperfect sideband cancellation
+    // 4th order Butterworth LPF (48 dB/oct) provides steep anti-aliasing
+    std::array<float, MAX_CHANNELS> classicDcBlockState{};  // DC blocker state per channel
+    std::array<std::array<float, 8>, MAX_CHANNELS> classicFbLpfState{};  // 4th order LPF state (2 cascaded biquads)
+    std::array<float, 10> classicFbLpfCoeffs{};  // Coefficients for 2 cascaded biquads (5 each)
 
     // Tempo sync division multipliers (relative to quarter note)
     static constexpr int NUM_TEMPO_DIVISIONS = 16;
