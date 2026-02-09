@@ -289,11 +289,17 @@ std::vector<float> MusicalQuantizer::captureSpectralEnvelopeFast(
 {
     // OPTIMIZED: Uses pre-computed band bin ranges
     std::vector<float> envelope(NUM_ENVELOPE_BANDS, 0.0f);
+    const int magSize = static_cast<int>(magnitude.size());
 
     for (int band = 0; band < NUM_ENVELOPE_BANDS; ++band)
     {
         auto [lowBin, highBin] = bandBinRanges[static_cast<size_t>(band)];
         if (lowBin < 0)
+            continue;
+
+        // Bounds check: clamp highBin to magnitude size
+        highBin = std::min(highBin, magSize - 1);
+        if (lowBin > highBin)
             continue;
 
         float sumSquares = 0.0f;
@@ -346,7 +352,8 @@ void MusicalQuantizer::applySpectralEnvelopeFast(
     }
 
     // Apply ratios using lookup table (single loop, no nested search)
-    for (int k = 1; k < numBins; ++k)
+    int lookupSize = static_cast<int>(binToBandLookup.size());
+    for (int k = 1; k < numBins && k < lookupSize; ++k)
     {
         int band = binToBandLookup[static_cast<size_t>(k)];
         if (band >= 0)

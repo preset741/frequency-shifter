@@ -653,7 +653,7 @@ FrequencyShifterEditor::FrequencyShifterEditor(FrequencyShifterProcessor& p)
 
     setupHorizontalSlider(lfoRateSlider);
     lfoRateSlider.setTextValueSuffix(" Hz");
-    lfoRateSlider.setNumDecimalPlacesToDisplay(2);
+    lfoRateSlider.setNumDecimalPlacesToDisplay(1);  // Reduced from 2 for cleaner display
     addAndMakeVisible(lfoRateSlider);
     lfoRateAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_LFO_RATE, lfoRateSlider);
@@ -788,7 +788,7 @@ FrequencyShifterEditor::FrequencyShifterEditor(FrequencyShifterProcessor& p)
 
     setupHorizontalSlider(dlyLfoRateSlider);
     dlyLfoRateSlider.setTextValueSuffix(" Hz");
-    dlyLfoRateSlider.setNumDecimalPlacesToDisplay(2);
+    dlyLfoRateSlider.setNumDecimalPlacesToDisplay(1);  // Reduced from 2 for cleaner display
     addAndMakeVisible(dlyLfoRateSlider);
     dlyLfoRateAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_DLY_LFO_RATE, dlyLfoRateSlider);

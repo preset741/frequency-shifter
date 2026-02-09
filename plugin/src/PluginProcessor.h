@@ -230,6 +230,7 @@ private:
     std::atomic<float> delayDamping{ 30.0f };
     std::atomic<float> delayDiffuse{ 50.0f };  // Spectral delay wet/dry (smear effect)
     std::atomic<float> delayGain{ 0.0f };  // dB
+    std::atomic<bool> delayNeedsUpdate{ false };  // Flag for thread-safe deferred updates
 
     // Phase 2B: Envelope preservation and transient detection
     std::atomic<float> preserveAmount{ 0.0f };     // 0.0 - 1.0

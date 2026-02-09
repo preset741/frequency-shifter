@@ -23,8 +23,9 @@ PhaseVocoder::PhaseVocoder(int fftSize, int hopSize, double sampleRate)
     binFrequencies.resize(numBins);
     for (int i = 0; i < numBins; ++i)
     {
-        // Using formula: bin_freq[k] = k * sample_rate / fft_size
-        // But for phase vocoder: bin_freq[k] = k * sample_rate / (2 * (numBins - 1))
+        // Bin frequency formula: bin_freq[k] = k * sample_rate / fft_size
+        // Since numBins = fftSize/2 + 1, we have fftSize = 2*(numBins-1)
+        // So this is equivalent to: k * sample_rate / fft_size
         binFrequencies[i] = static_cast<float>(i) * static_cast<float>(sampleRate)
                             / static_cast<float>(2 * (numBins - 1));
     }

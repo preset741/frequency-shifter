@@ -192,6 +192,10 @@ private:
         if (freq <= 0.0f)
             return 1.0f;
 
+        // Guard against invalid lowFreq or transition
+        if (lowFreq <= 0.0f || transition <= 0.0f)
+            return 1.0f;
+
         // Calculate octaves from cutoff
         float octavesFromCutoff = std::log2(freq / lowFreq);
 
@@ -210,6 +214,10 @@ private:
     {
         if (freq <= 0.0f)
             return 0.0f;
+
+        // Guard against invalid highFreq or transition
+        if (highFreq <= 0.0f || transition <= 0.0f)
+            return 1.0f;
 
         // Calculate octaves from cutoff
         float octavesFromCutoff = std::log2(freq / highFreq);
@@ -245,6 +253,10 @@ private:
         if (freq <= 0.0f)
             return 1.0f;
 
+        // Guard against invalid cutoff or transition
+        if (cutoff <= 0.0f || transition <= 0.0f)
+            return 1.0f;
+
         float octavesFromCutoff = std::log2(freq / cutoff);
         float t = (octavesFromCutoff / transition) * 0.5f + 0.5f;
         return 1.0f - smoothstep(t);
@@ -257,6 +269,10 @@ private:
     {
         if (freq <= 0.0f)
             return 0.0f;
+
+        // Guard against invalid cutoff or transition
+        if (cutoff <= 0.0f || transition <= 0.0f)
+            return 1.0f;
 
         float octavesFromCutoff = std::log2(freq / cutoff);
         float t = (octavesFromCutoff / transition) * 0.5f + 0.5f;

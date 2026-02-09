@@ -123,6 +123,7 @@ std::vector<float> STFT::inverse(const std::vector<float>& magnitude, const std:
     }
 
     // Mirror for negative frequencies (conjugate symmetry for real signal)
+    // Skip bin 0 (DC) and bin numBins-1 (Nyquist) as they don't need mirroring
     for (int i = 1; i < numBins - 1; ++i)
     {
         fftBuffer[fftSize - i] = std::conj(fftBuffer[i]);

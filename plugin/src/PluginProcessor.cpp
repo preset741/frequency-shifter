@@ -552,25 +552,25 @@ void FrequencyShifterProcessor::parameterChanged(const juce::String& parameterID
     {
         int mode = static_cast<int>(newValue);
         maskMode.store(mode);
-        spectralMask.setMode(static_cast<fshift::SpectralMask::Mode>(mode));
+        // Defer spectralMask.setMode() to audio thread for thread safety
         maskNeedsUpdate.store(true);
     }
     else if (parameterID == PARAM_MASK_LOW_FREQ)
     {
         maskLowFreq.store(newValue);
-        spectralMask.setLowFreq(newValue);
+        // Defer spectralMask.setLowFreq() to audio thread for thread safety
         maskNeedsUpdate.store(true);
     }
     else if (parameterID == PARAM_MASK_HIGH_FREQ)
     {
         maskHighFreq.store(newValue);
-        spectralMask.setHighFreq(newValue);
+        // Defer spectralMask.setHighFreq() to audio thread for thread safety
         maskNeedsUpdate.store(true);
     }
     else if (parameterID == PARAM_MASK_TRANSITION)
     {
         maskTransition.store(newValue);
-        spectralMask.setTransition(newValue);
+        // Defer spectralMask.setTransition() to audio thread for thread safety
         maskNeedsUpdate.store(true);
     }
     else if (parameterID == PARAM_DELAY_ENABLED)
@@ -580,9 +580,8 @@ void FrequencyShifterProcessor::parameterChanged(const juce::String& parameterID
     else if (parameterID == PARAM_DELAY_TIME)
     {
         delayTime.store(newValue);
-        for (auto& chDelays : spectralDelays)
-            for (auto& delay : chDelays)
-                delay.setDelayTime(newValue);
+        // Defer spectralDelay updates to audio thread for thread safety
+        delayNeedsUpdate.store(true);
     }
     else if (parameterID == PARAM_DELAY_SYNC)
     {
@@ -595,44 +594,32 @@ void FrequencyShifterProcessor::parameterChanged(const juce::String& parameterID
     else if (parameterID == PARAM_DELAY_SLOPE)
     {
         delaySlope.store(newValue);
-        for (auto& chDelays : spectralDelays)
-            for (auto& delay : chDelays)
-                delay.setFrequencySlope(newValue);
+        // Defer spectralDelay updates to audio thread for thread safety
+        delayNeedsUpdate.store(true);
     }
     else if (parameterID == PARAM_DELAY_FEEDBACK)
     {
         delayFeedback.store(newValue);
-        for (auto& chDelays : spectralDelays)
-            for (auto& delay : chDelays)
-                delay.setFeedback(newValue / 100.0f);
+        // Defer spectralDelay updates to audio thread for thread safety
+        delayNeedsUpdate.store(true);
     }
     else if (parameterID == PARAM_DELAY_DAMPING)
     {
         delayDamping.store(newValue);
-        for (auto& chDelays : spectralDelays)
-            for (auto& delay : chDelays)
-                delay.setDamping(newValue);
-
-        // Calculate feedback filter coefficient for time-domain damping
-        // 0% damping = 12kHz cutoff, 100% damping = 1kHz cutoff (logarithmic)
-        float dampNorm = newValue / 100.0f;
-        float cutoffHz = 12000.0f * std::pow(1000.0f / 12000.0f, dampNorm);
-        // One-pole lowpass: coeff = exp(-2*pi*fc/fs)
-        feedbackFilterCoeff = std::exp(-2.0f * static_cast<float>(M_PI) * cutoffHz / static_cast<float>(currentSampleRate));
+        // Defer spectralDelay updates to audio thread for thread safety
+        delayNeedsUpdate.store(true);
     }
     else if (parameterID == PARAM_DELAY_DIFFUSE)
     {
         delayDiffuse.store(newValue);
-        for (auto& chDelays : spectralDelays)
-            for (auto& delay : chDelays)
-                delay.setMix(newValue);  // Spectral delay uses "mix" internally for diffuse
+        // Defer spectralDelay updates to audio thread for thread safety
+        delayNeedsUpdate.store(true);
     }
     else if (parameterID == PARAM_DELAY_GAIN)
     {
         delayGain.store(newValue);
-        for (auto& chDelays : spectralDelays)
-            for (auto& delay : chDelays)
-                delay.setGain(newValue);
+        // Defer spectralDelay updates to audio thread for thread safety
+        delayNeedsUpdate.store(true);
     }
     else if (parameterID == PARAM_PRESERVE)
     {
@@ -1015,10 +1002,47 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
     }
 
     // Update mask curve if parameters changed (use primary FFT size)
+    // Apply stored atomic values here in audio thread for thread safety
     if (maskNeedsUpdate.load())
     {
+        spectralMask.setMode(static_cast<fshift::SpectralMask::Mode>(maskMode.load()));
+        spectralMask.setLowFreq(maskLowFreq.load());
+        spectralMask.setHighFreq(maskHighFreq.load());
+        spectralMask.setTransition(maskTransition.load());
         spectralMask.computeMaskCurve(currentSampleRate, currentFftSizes[0]);
         maskNeedsUpdate.store(false);
+    }
+
+    // Apply deferred spectral delay updates in audio thread for thread safety
+    if (delayNeedsUpdate.load())
+    {
+        float currentDelayTime = delayTime.load();
+        float currentDelaySlope = delaySlope.load();
+        float currentDelayFeedback = delayFeedback.load();
+        float currentDelayDamping = delayDamping.load();
+        float currentDelayDiffuse = delayDiffuse.load();
+        float currentDelayGainDb = delayGain.load();
+
+        for (auto& chDelays : spectralDelays)
+        {
+            for (auto& delay : chDelays)
+            {
+                delay.setDelayTime(currentDelayTime);
+                delay.setFrequencySlope(currentDelaySlope);
+                delay.setFeedback(currentDelayFeedback / 100.0f);
+                delay.setDamping(currentDelayDamping);
+                delay.setMix(currentDelayDiffuse);
+                delay.setGain(currentDelayGainDb);
+            }
+        }
+
+        // Update feedback filter coefficient for time-domain damping
+        // 0% damping = 12kHz cutoff, 100% damping = 1kHz cutoff (logarithmic)
+        float dampNorm = currentDelayDamping / 100.0f;
+        float cutoffHz = 12000.0f * std::pow(1000.0f / 12000.0f, dampNorm);
+        feedbackFilterCoeff = std::exp(-2.0f * static_cast<float>(M_PI) * cutoffHz / static_cast<float>(currentSampleRate));
+
+        delayNeedsUpdate.store(false);
     }
 
     const int numChannels = buffer.getNumChannels();
@@ -1602,9 +1626,9 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
                     auto& fbBuffer = feedbackBuffers[static_cast<size_t>(channel)];
                     int fbBufSize = static_cast<int>(fbBuffer.size());
 
-                    // === Feedback signal chain: HPF (80Hz) → LPF (DAMP) → Write ===
+                    // === Feedback signal chain: HPF (150Hz) → LPF (DAMP) → Write ===
 
-                    // Step 1: Apply highpass filter (80Hz) to prevent low frequency buildup
+                    // Step 1: Apply highpass filter (150Hz) to prevent low frequency buildup
                     // Biquad Direct Form I: y[n] = b0*x[n] + b1*x[n-1] + b2*x[n-2] - a1*y[n-1] - a2*y[n-2]
                     auto& hpfState = feedbackHpfState[static_cast<size_t>(channel)];
                     float x0 = outputSample;
