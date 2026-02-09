@@ -25,3 +25,7 @@
 *.pyzwzwzw
 
 *.DS_Store
+
+# Build artifacts
+build/
+plugin/build/
