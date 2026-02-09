@@ -29,7 +29,7 @@ void SpectrumAnalyzer::timerCallback()
         }
 
         // Convert normalized value back to dB for auto-scaling
-        float framePeakDb = framePeakNorm * 100.0f - 100.0f;  // Reverse the 0-1 to -100..0 dB mapping
+        float framePeakDb = framePeakNorm * 100.0f - 100.0f;
 
         // Update peak detector (fast attack, slow decay)
         if (framePeakDb > currentPeakDb)
@@ -39,23 +39,19 @@ void SpectrumAnalyzer::timerCallback()
         else
         {
             currentPeakDb *= peakDecayRate;
-            // Clamp to floor
             if (currentPeakDb < floorDb)
                 currentPeakDb = floorDb;
         }
 
         // Update display ceiling (adapts to signal level)
-        // Target ceiling is peak + 10dB headroom, clamped to reasonable range
         float targetCeiling = std::min(0.0f, std::max(-60.0f, currentPeakDb + 10.0f));
 
         if (targetCeiling > displayCeilingDb)
         {
-            // Fast attack when signal gets louder
             displayCeilingDb = displayCeilingDb + (targetCeiling - displayCeilingDb) * ceilingAttackRate;
         }
         else
         {
-            // Slow decay when signal gets quieter
             displayCeilingDb = displayCeilingDb * ceilingDecayRate + targetCeiling * (1.0f - ceilingDecayRate);
         }
 
@@ -79,12 +75,10 @@ void SpectrumAnalyzer::timerCallback()
             }
         }
 
-        // Also decay peak detector
         currentPeakDb *= peakDecayRate;
         if (currentPeakDb < floorDb)
             currentPeakDb = floorDb;
 
-        // Slowly decay ceiling back to default
         displayCeilingDb = displayCeilingDb * 0.999f + (-10.0f) * 0.001f;
 
         if (needsRepaint)
@@ -94,42 +88,38 @@ void SpectrumAnalyzer::timerCallback()
 
 void SpectrumAnalyzer::paint(juce::Graphics& g)
 {
+    using Colors = FrequencyShifterEditor::Colors;
+
     const auto bounds = getLocalBounds().toFloat();
     const float width = bounds.getWidth();
     const float height = bounds.getHeight();
 
-    // Calculate current display range
     const float rangeDb = displayCeilingDb - floorDb;
 
     // Background
-    g.setColour(juce::Colour(backgroundColor));
+    g.setColour(juce::Colour(Colors::strip));
     g.fillRoundedRectangle(bounds, 6.0f);
 
     // Draw grid lines with dynamic dB labels
-    g.setColour(juce::Colour(gridColor));
+    g.setColour(juce::Colour(Colors::stripBorder));
 
-    // Calculate nice grid spacing based on current range
-    int gridSpacing = 20;  // Default 20dB spacing
+    int gridSpacing = 20;
     if (rangeDb < 50.0f) gridSpacing = 10;
     if (rangeDb < 30.0f) gridSpacing = 5;
 
-    // Round ceiling to nearest grid line for cleaner labels
     int ceilingRounded = static_cast<int>(std::ceil(displayCeilingDb / gridSpacing) * gridSpacing);
 
-    // Horizontal grid lines (dB levels) - draw from ceiling down to floor
     for (int db = ceilingRounded; db >= static_cast<int>(floorDb); db -= gridSpacing)
     {
-        // Map dB to y position using current dynamic range
         float normalized = (static_cast<float>(db) - floorDb) / rangeDb;
         float y = height * (1.0f - normalized);
 
         if (y >= 0 && y <= height)
         {
-            g.setColour(juce::Colour(gridColor));
+            g.setColour(juce::Colour(Colors::stripBorder));
             g.drawHorizontalLine(static_cast<int>(y), 0.0f, width);
 
-            // Draw dB label on the left
-            g.setColour(juce::Colour(textColor));
+            g.setColour(juce::Colour(Colors::textMuted));
             g.setFont(juce::FontOptions(8.0f));
             g.drawText(juce::String(db), 2, static_cast<int>(y) - 6, 25, 12,
                        juce::Justification::left, false);
@@ -142,7 +132,7 @@ void SpectrumAnalyzer::paint(juce::Graphics& g)
     const int numBins = fftSize / 2;
 
     // Frequency labels (logarithmic scale)
-    g.setColour(juce::Colour(textColor));
+    g.setColour(juce::Colour(Colors::textMuted));
     g.setFont(juce::FontOptions(9.0f));
 
     const std::array<float, 6> freqLabels = { 100.0f, 500.0f, 1000.0f, 2000.0f, 5000.0f, 10000.0f };
@@ -150,15 +140,14 @@ void SpectrumAnalyzer::paint(juce::Graphics& g)
     {
         if (freq < sampleRate / 2.0)
         {
-            // Log scale mapping: x = log(f/fMin) / log(fMax/fMin)
             const float fMin = 20.0f;
             const float fMax = static_cast<float>(sampleRate / 2.0);
             float x = std::log(freq / fMin) / std::log(fMax / fMin) * width;
 
-            g.setColour(juce::Colour(gridColor));
+            g.setColour(juce::Colour(Colors::stripBorder));
             g.drawVerticalLine(static_cast<int>(x), 0.0f, height);
 
-            g.setColour(juce::Colour(textColor));
+            g.setColour(juce::Colour(Colors::textMuted));
             juce::String label = freq >= 1000.0f
                 ? juce::String(static_cast<int>(freq / 1000)) + "k"
                 : juce::String(static_cast<int>(freq));
@@ -183,20 +172,16 @@ void SpectrumAnalyzer::paint(juce::Graphics& g)
         {
             float binFreq = static_cast<float>(bin) * binWidth;
 
-            // Skip bins below minimum frequency
             if (binFreq < fMin)
                 continue;
 
-            // Log scale x position
             float x = std::log(binFreq / fMin) / std::log(fMax / fMin) * width;
 
-            // Get magnitude and convert to dB for auto-scaled display
             float magnitudeNorm = smoothedData[static_cast<size_t>(bin)];
-            float magnitudeDb = magnitudeNorm * 100.0f - 100.0f;  // Convert 0-1 back to -100..0 dB
+            float magnitudeDb = magnitudeNorm * 100.0f - 100.0f;
 
-            // Map dB to y position using dynamic range
             float normalized = (magnitudeDb - floorDb) / rangeDb;
-            normalized = std::max(0.0f, std::min(1.0f, normalized));  // Clamp to valid range
+            normalized = std::max(0.0f, std::min(1.0f, normalized));
             float y = height * (1.0f - normalized);
 
             if (!pathStarted)
@@ -213,24 +198,23 @@ void SpectrumAnalyzer::paint(juce::Graphics& g)
             }
         }
 
-        // Complete fill path
         if (pathStarted)
         {
             fillPath.lineTo(width, height);
             fillPath.closeSubPath();
 
-            // Draw filled area
-            g.setColour(juce::Colour(spectrumFillColor));
+            // Draw filled area with accent glow
+            g.setColour(juce::Colour(Colors::accentGlow));
             g.fillPath(fillPath);
 
-            // Draw spectrum line
-            g.setColour(juce::Colour(spectrumColor));
+            // Draw spectrum line with accent color
+            g.setColour(juce::Colour(Colors::accent));
             g.strokePath(spectrumPath, juce::PathStrokeType(1.5f));
         }
     }
 
     // Border
-    g.setColour(juce::Colour(gridColor));
+    g.setColour(juce::Colour(Colors::stripBorder));
     g.drawRoundedRectangle(bounds.reduced(0.5f), 6.0f, 1.0f);
 }
 
@@ -240,96 +224,147 @@ void SpectrumAnalyzer::resized()
 }
 
 //==============================================================================
-// ModernLookAndFeel Implementation
+// HolyShifterLookAndFeel Implementation
 //==============================================================================
 
-FrequencyShifterEditor::ModernLookAndFeel::ModernLookAndFeel()
+FrequencyShifterEditor::HolyShifterLookAndFeel::HolyShifterLookAndFeel()
 {
-    // Set default colors
+    // Set default colors for Holy Shifter theme
     setColour(juce::Slider::rotarySliderFillColourId, juce::Colour(Colors::accent));
-    setColour(juce::Slider::rotarySliderOutlineColourId, juce::Colour(Colors::knobBackground));
+    setColour(juce::Slider::rotarySliderOutlineColourId, juce::Colour(Colors::track));
     setColour(juce::Slider::thumbColourId, juce::Colour(Colors::accent));
-    setColour(juce::Slider::trackColourId, juce::Colour(Colors::knobBackground));
+    setColour(juce::Slider::trackColourId, juce::Colour(Colors::track));
+    setColour(juce::Slider::textBoxTextColourId, juce::Colour(Colors::text));
+    setColour(juce::Slider::textBoxBackgroundColourId, juce::Colours::transparentBlack);
+    setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
 
-    setColour(juce::ComboBox::backgroundColourId, juce::Colour(Colors::knobBackground));
+    setColour(juce::ComboBox::backgroundColourId, juce::Colour(Colors::raised));
     setColour(juce::ComboBox::textColourId, juce::Colour(Colors::text));
-    setColour(juce::ComboBox::outlineColourId, juce::Colour(Colors::knobForeground));
-    setColour(juce::ComboBox::arrowColourId, juce::Colour(Colors::accent));
+    setColour(juce::ComboBox::outlineColourId, juce::Colour(Colors::border));
+    setColour(juce::ComboBox::arrowColourId, juce::Colour(Colors::textMuted));
 
-    setColour(juce::PopupMenu::backgroundColourId, juce::Colour(Colors::panelBackground));
+    setColour(juce::PopupMenu::backgroundColourId, juce::Colour(Colors::raised));
     setColour(juce::PopupMenu::textColourId, juce::Colour(Colors::text));
-    setColour(juce::PopupMenu::highlightedBackgroundColourId, juce::Colour(Colors::accent));
-    setColour(juce::PopupMenu::highlightedTextColourId, juce::Colour(Colors::background));
+    setColour(juce::PopupMenu::highlightedBackgroundColourId, juce::Colour(Colors::accentDim));
+    setColour(juce::PopupMenu::highlightedTextColourId, juce::Colour(Colors::text));
 
     setColour(juce::ToggleButton::textColourId, juce::Colour(Colors::text));
     setColour(juce::ToggleButton::tickColourId, juce::Colour(Colors::accent));
-    setColour(juce::ToggleButton::tickDisabledColourId, juce::Colour(Colors::textDim));
+    setColour(juce::ToggleButton::tickDisabledColourId, juce::Colour(Colors::textMuted));
 
     setColour(juce::Label::textColourId, juce::Colour(Colors::text));
 }
 
-void FrequencyShifterEditor::ModernLookAndFeel::drawRotarySlider(
+void FrequencyShifterEditor::HolyShifterLookAndFeel::drawRotarySlider(
     juce::Graphics& g, int x, int y, int width, int height,
     float sliderPosProportional, float rotaryStartAngle, float rotaryEndAngle,
     juce::Slider& slider)
 {
-    const float radius = static_cast<float>(juce::jmin(width / 2, height / 2)) - 4.0f;
+    const float radius = static_cast<float>(juce::jmin(width / 2, height / 2)) - 18.0f;
     const float centreX = static_cast<float>(x) + static_cast<float>(width) * 0.5f;
     const float centreY = static_cast<float>(y) + static_cast<float>(height) * 0.5f;
-    const float rx = centreX - radius;
-    const float ry = centreY - radius;
-    const float rw = radius * 2.0f;
     const float angle = rotaryStartAngle + sliderPosProportional * (rotaryEndAngle - rotaryStartAngle);
 
-    // Background arc
-    g.setColour(juce::Colour(Colors::knobBackground));
+    // Check if bipolar (shift knob has min < 0 and max > 0)
+    double minVal = slider.getMinimum();
+    double maxVal = slider.getMaximum();
+    bool isBipolar = (minVal < 0 && maxVal > 0);
+    float centerAngle = rotaryStartAngle + 0.5f * (rotaryEndAngle - rotaryStartAngle);
+
+    // Subtle outer ring
+    g.setColour(juce::Colour(Colors::borderDim));
+    g.drawEllipse(centreX - radius - 8.0f, centreY - radius - 8.0f,
+                  (radius + 8.0f) * 2.0f, (radius + 8.0f) * 2.0f, 0.5f);
+
+    // Background arc (track)
+    g.setColour(juce::Colour(Colors::track));
     juce::Path backgroundArc;
     backgroundArc.addCentredArc(centreX, centreY, radius, radius, 0.0f,
                                  rotaryStartAngle, rotaryEndAngle, true);
-    g.strokePath(backgroundArc, juce::PathStrokeType(6.0f, juce::PathStrokeType::curved,
+    g.strokePath(backgroundArc, juce::PathStrokeType(2.0f, juce::PathStrokeType::curved,
                                                       juce::PathStrokeType::rounded));
 
-    // Value arc
-    if (sliderPosProportional > 0.0f)
+    // Value arc with glow effect
+    if (isBipolar)
     {
-        g.setColour(juce::Colour(Colors::accent));
-        juce::Path valueArc;
-        valueArc.addCentredArc(centreX, centreY, radius, radius, 0.0f,
-                                rotaryStartAngle, angle, true);
-        g.strokePath(valueArc, juce::PathStrokeType(6.0f, juce::PathStrokeType::curved,
-                                                     juce::PathStrokeType::rounded));
+        // Bipolar: draw from center to current position
+        float startAngle = (sliderPosProportional >= 0.5f) ? centerAngle : angle;
+        float endAngle = (sliderPosProportional >= 0.5f) ? angle : centerAngle;
+
+        if (std::abs(endAngle - startAngle) > 0.01f)
+        {
+            g.setColour(juce::Colour(Colors::accent));
+            juce::Path valueArc;
+            valueArc.addCentredArc(centreX, centreY, radius, radius, 0.0f,
+                                    startAngle, endAngle, true);
+            g.strokePath(valueArc, juce::PathStrokeType(2.0f, juce::PathStrokeType::curved,
+                                                         juce::PathStrokeType::rounded));
+        }
+    }
+    else
+    {
+        // Unipolar: draw from start to current position
+        if (sliderPosProportional > 0.0f)
+        {
+            g.setColour(juce::Colour(Colors::accent));
+            juce::Path valueArc;
+            valueArc.addCentredArc(centreX, centreY, radius, radius, 0.0f,
+                                    rotaryStartAngle, angle, true);
+            g.strokePath(valueArc, juce::PathStrokeType(2.0f, juce::PathStrokeType::curved,
+                                                         juce::PathStrokeType::rounded));
+        }
     }
 
-    // Center dot
-    g.setColour(juce::Colour(Colors::knobForeground));
-    g.fillEllipse(centreX - radius * 0.6f, centreY - radius * 0.6f,
-                  radius * 1.2f, radius * 1.2f);
+    // Tick marks at 0%, 25%, 50%, 75%, 100%
+    for (int i = 0; i <= 4; ++i)
+    {
+        float tickNorm = static_cast<float>(i) / 4.0f;
+        float tickAngle = rotaryStartAngle + tickNorm * (rotaryEndAngle - rotaryStartAngle);
+        float tickAngleRad = tickAngle - juce::MathConstants<float>::halfPi;
 
-    // Pointer
-    juce::Path pointer;
-    const float pointerLength = radius * 0.5f;
-    const float pointerThickness = 3.0f;
-    pointer.addRoundedRectangle(-pointerThickness * 0.5f, -radius + 8.0f,
-                                 pointerThickness, pointerLength, 1.0f);
+        float innerR = radius + 6.0f;
+        float outerR = radius + 10.0f;
+
+        float x1 = centreX + innerR * std::cos(tickAngleRad);
+        float y1 = centreY + innerR * std::sin(tickAngleRad);
+        float x2 = centreX + outerR * std::cos(tickAngleRad);
+        float y2 = centreY + outerR * std::sin(tickAngleRad);
+
+        // Center tick (50%) is brighter for bipolar knobs
+        bool isCenterTick = (i == 2) && isBipolar;
+        g.setColour(juce::Colour(isCenterTick ? Colors::textSec : Colors::textMuted));
+        g.drawLine(x1, y1, x2, y2, 0.6f);
+    }
+
+    // Indicator dot
+    float indicatorAngleRad = angle - juce::MathConstants<float>::halfPi;
+    float dotX = centreX + radius * std::cos(indicatorAngleRad);
+    float dotY = centreY + radius * std::sin(indicatorAngleRad);
     g.setColour(juce::Colour(Colors::accent));
-    g.fillPath(pointer, juce::AffineTransform::rotation(angle).translated(centreX, centreY));
+    g.fillEllipse(dotX - 3.0f, dotY - 3.0f, 6.0f, 6.0f);
 
     // Value text in center
     g.setColour(juce::Colour(Colors::text));
-    g.setFont(juce::FontOptions(14.0f));
+    g.setFont(juce::FontOptions(26.0f).withStyle("Light"));
 
-    juce::String valueText;
     double value = slider.getValue();
+    juce::String valueText;
     if (std::abs(value) >= 100.0)
         valueText = juce::String(static_cast<int>(value));
     else
         valueText = juce::String(value, 1);
 
-    g.drawText(valueText, static_cast<int>(centreX - 30), static_cast<int>(centreY - 8),
-               60, 16, juce::Justification::centred, false);
+    g.drawText(valueText, static_cast<int>(centreX - 50), static_cast<int>(centreY - 14),
+               100, 28, juce::Justification::centred, false);
+
+    // Unit text below value
+    g.setColour(juce::Colour(Colors::textMuted));
+    g.setFont(juce::FontOptions(9.0f));
+    g.drawText("HZ", static_cast<int>(centreX - 20), static_cast<int>(centreY + 14),
+               40, 12, juce::Justification::centred, false);
 }
 
-void FrequencyShifterEditor::ModernLookAndFeel::drawLinearSlider(
+void FrequencyShifterEditor::HolyShifterLookAndFeel::drawLinearSlider(
     juce::Graphics& g, int x, int y, int width, int height,
     float sliderPos, float minSliderPos, float maxSliderPos,
     juce::Slider::SliderStyle style, juce::Slider& slider)
@@ -337,20 +372,24 @@ void FrequencyShifterEditor::ModernLookAndFeel::drawLinearSlider(
     if (style == juce::Slider::LinearHorizontal)
     {
         const float trackY = static_cast<float>(y) + static_cast<float>(height) * 0.5f;
-        const float trackHeight = 4.0f;
+        const float trackHeight = 1.5f;
 
         // Background track
-        g.setColour(juce::Colour(Colors::knobBackground));
+        g.setColour(juce::Colour(Colors::track));
         g.fillRoundedRectangle(static_cast<float>(x), trackY - trackHeight * 0.5f,
-                                static_cast<float>(width), trackHeight, 2.0f);
+                                static_cast<float>(width), trackHeight, 1.0f);
 
-        // Value track
-        g.setColour(juce::Colour(Colors::accent));
-        g.fillRoundedRectangle(static_cast<float>(x), trackY - trackHeight * 0.5f,
-                                sliderPos - static_cast<float>(x), trackHeight, 2.0f);
+        // Value track with accent color
+        float valueWidth = sliderPos - static_cast<float>(x);
+        if (valueWidth > 0)
+        {
+            g.setColour(juce::Colour(Colors::accent));
+            g.fillRoundedRectangle(static_cast<float>(x), trackY - trackHeight * 0.5f,
+                                    valueWidth, trackHeight, 1.0f);
+        }
 
-        // Thumb
-        const float thumbRadius = 8.0f;
+        // Thumb (small circle)
+        const float thumbRadius = 3.5f;
         g.setColour(juce::Colour(Colors::accent));
         g.fillEllipse(sliderPos - thumbRadius, trackY - thumbRadius,
                       thumbRadius * 2.0f, thumbRadius * 2.0f);
@@ -362,6 +401,100 @@ void FrequencyShifterEditor::ModernLookAndFeel::drawLinearSlider(
     }
 }
 
+void FrequencyShifterEditor::HolyShifterLookAndFeel::drawToggleButton(
+    juce::Graphics& g, juce::ToggleButton& button,
+    bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown)
+{
+    (void)shouldDrawButtonAsHighlighted;
+    (void)shouldDrawButtonAsDown;
+
+    auto bounds = button.getLocalBounds().toFloat();
+    bool isOn = button.getToggleState();
+
+    // Pill-style toggle dimensions
+    const float toggleWidth = 26.0f;
+    const float toggleHeight = 13.0f;
+    const float dotSize = 9.0f;
+
+    // Draw toggle pill
+    float toggleX = 0.0f;
+    float toggleY = (bounds.getHeight() - toggleHeight) * 0.5f;
+
+    g.setColour(juce::Colour(isOn ? Colors::accentDim : Colors::track));
+    g.fillRoundedRectangle(toggleX, toggleY, toggleWidth, toggleHeight, toggleHeight * 0.5f);
+
+    // Draw toggle dot
+    float dotX = isOn ? (toggleX + toggleWidth - dotSize - 2.0f) : (toggleX + 2.0f);
+    float dotY = toggleY + (toggleHeight - dotSize) * 0.5f;
+    g.setColour(juce::Colour(isOn ? Colors::accent : Colors::textMuted));
+    g.fillEllipse(dotX, dotY, dotSize, dotSize);
+
+    // Draw label text
+    g.setColour(juce::Colour(isOn ? Colors::text : Colors::textSec));
+    g.setFont(juce::FontOptions(9.0f));
+
+    auto textBounds = bounds.withLeft(toggleWidth + 6.0f);
+    g.drawText(button.getButtonText(), textBounds, juce::Justification::centredLeft, false);
+}
+
+void FrequencyShifterEditor::HolyShifterLookAndFeel::drawComboBox(
+    juce::Graphics& g, int width, int height, bool isButtonDown,
+    int buttonX, int buttonY, int buttonW, int buttonH,
+    juce::ComboBox& box)
+{
+    (void)isButtonDown;
+    (void)buttonX;
+    (void)buttonY;
+    (void)buttonW;
+    (void)buttonH;
+
+    auto bounds = juce::Rectangle<float>(0, 0, static_cast<float>(width), static_cast<float>(height));
+
+    // Background
+    g.setColour(juce::Colour(Colors::raised));
+    g.fillRoundedRectangle(bounds, 3.0f);
+
+    // Border
+    g.setColour(juce::Colour(Colors::border));
+    g.drawRoundedRectangle(bounds.reduced(0.5f), 3.0f, 1.0f);
+
+    // Arrow
+    g.setColour(juce::Colour(Colors::textMuted));
+    float arrowX = static_cast<float>(width) - 12.0f;
+    float arrowY = static_cast<float>(height) * 0.5f;
+    juce::Path arrow;
+    arrow.addTriangle(arrowX - 3.0f, arrowY - 2.0f,
+                      arrowX + 3.0f, arrowY - 2.0f,
+                      arrowX, arrowY + 2.0f);
+    g.fillPath(arrow);
+}
+
+void FrequencyShifterEditor::HolyShifterLookAndFeel::drawPopupMenuItem(
+    juce::Graphics& g, const juce::Rectangle<int>& area,
+    bool isSeparator, bool isActive, bool isHighlighted,
+    bool isTicked, bool hasSubMenu,
+    const juce::String& text, const juce::String& shortcutKeyText,
+    const juce::Drawable* icon, const juce::Colour* textColour)
+{
+    (void)isSeparator;
+    (void)isActive;
+    (void)isTicked;
+    (void)hasSubMenu;
+    (void)shortcutKeyText;
+    (void)icon;
+    (void)textColour;
+
+    if (isHighlighted)
+    {
+        g.setColour(juce::Colour(Colors::accentDim));
+        g.fillRect(area);
+    }
+
+    g.setColour(juce::Colour(Colors::text));
+    g.setFont(juce::FontOptions(11.0f));
+    g.drawText(text, area.reduced(8, 0), juce::Justification::centredLeft, true);
+}
+
 //==============================================================================
 // FrequencyShifterEditor Implementation
 //==============================================================================
@@ -369,113 +502,64 @@ void FrequencyShifterEditor::ModernLookAndFeel::drawLinearSlider(
 FrequencyShifterEditor::FrequencyShifterEditor(FrequencyShifterProcessor& p)
     : AudioProcessorEditor(&p), audioProcessor(p)
 {
-    setLookAndFeel(&modernLookAndFeel);
+    setLookAndFeel(&holyLookAndFeel);
 
-    // Processing mode toggle (Classic vs Spectral)
-    processingModeCombo.addItem("Classic", 1);
-    processingModeCombo.addItem("Spectral", 2);
+    // Processing mode combo (Classic vs Spectral)
+    // Parameter order: 0=Classic, 1=Spectral (must match processor's StringArray)
+    processingModeCombo.addItem("Classic", 1);   // ID 1 -> Index 0
+    processingModeCombo.addItem("Spectral", 2);  // ID 2 -> Index 1
     processingModeCombo.onChange = [this]() { updateControlsForMode(); };
     addAndMakeVisible(processingModeCombo);
     processingModeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
         audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_PROCESSING_MODE, processingModeCombo);
 
-    setupLabel(processingModeLabel, "MODE");
-    addAndMakeVisible(processingModeLabel);
+    // WARM toggle
+    warmButton.setButtonText("Warm");
+    addAndMakeVisible(warmButton);
+    warmAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_WARM, warmButton);
 
-    // Setup main shift slider with logarithmic scale (always on)
-    setupSlider(shiftSlider, juce::Slider::RotaryHorizontalVerticalDrag);
+    // Main shift knob with logarithmic scale
+    shiftSlider.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
     shiftSlider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
 
-    // Set up symmetric log scale for the shift knob
-    auto rangeToValue = [](double /*rangeStart*/, double /*rangeEnd*/, double normalised) -> double
+    auto rangeToValue = [](double, double, double normalised) -> double
     {
-        // Map from 0..1 to -1..1
         double symNorm = normalised * 2.0 - 1.0;
         double sign = symNorm >= 0.0 ? 1.0 : -1.0;
         double absNorm = std::abs(symNorm);
         constexpr double logScale = 10.0;
-        constexpr double maxShift = 20000.0;
+        constexpr double maxShift = 5000.0;
         double logMax = std::log(1.0 + maxShift / logScale);
         double absVal = logScale * (std::exp(absNorm * logMax) - 1.0);
         return sign * absVal;
     };
 
-    auto valueToRange = [](double /*rangeStart*/, double /*rangeEnd*/, double value) -> double
+    auto valueToRange = [](double, double, double value) -> double
     {
         double sign = value >= 0.0 ? 1.0 : -1.0;
         double absVal = std::abs(value);
         constexpr double logScale = 10.0;
-        constexpr double maxShift = 20000.0;
+        constexpr double maxShift = 5000.0;
         double logMax = std::log(1.0 + maxShift / logScale);
         double normalized = sign * std::log(1.0 + absVal / logScale) / logMax;
-        // Map from -1..1 to 0..1
         return (normalized + 1.0) * 0.5;
     };
 
-    auto snapToLegalValue = [](double /*rangeStart*/, double /*rangeEnd*/, double value) -> double
+    auto snapToLegalValue = [](double, double, double value) -> double
     {
-        // Snap to 0.1 Hz resolution for small values, 1 Hz for larger
         if (std::abs(value) < 100.0)
             return std::round(value * 10.0) / 10.0;
         return std::round(value);
     };
 
     shiftSlider.setNormalisableRange(
-        juce::NormalisableRange<double>(-20000.0, 20000.0, rangeToValue, valueToRange, snapToLegalValue));
+        juce::NormalisableRange<double>(-5000.0, 5000.0, rangeToValue, valueToRange, snapToLegalValue));
 
     addAndMakeVisible(shiftSlider);
-
-    // Add slider listener for manual sync (no attachment - we sync manually due to custom range)
     shiftSlider.addListener(this);
 
-    setupLabel(shiftLabel, "SHIFT (Hz)");
-    addAndMakeVisible(shiftLabel);
-
-    // Setup quantize slider
-    setupSlider(quantizeSlider, juce::Slider::LinearHorizontal);
-    quantizeSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
-    quantizeSlider.setNumDecimalPlacesToDisplay(1);
-    addAndMakeVisible(quantizeSlider);
-    quantizeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
-        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_QUANTIZE_STRENGTH, quantizeSlider);
-
-    setupLabel(quantizeLabel, "QUANTIZE");
-    addAndMakeVisible(quantizeLabel);
-
-    // Setup preserve slider (Phase 2B: Envelope preservation)
-    setupSlider(preserveSlider, juce::Slider::LinearHorizontal);
-    preserveSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
-    preserveSlider.setNumDecimalPlacesToDisplay(1);
-    addAndMakeVisible(preserveSlider);
-    preserveAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
-        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_PRESERVE, preserveSlider);
-
-    setupLabel(preserveLabel, "PRESERVE");
-    addAndMakeVisible(preserveLabel);
-
-    // Setup transients slider (Phase 2B: Transient bypass)
-    setupSlider(transientsSlider, juce::Slider::LinearHorizontal);
-    transientsSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
-    transientsSlider.setNumDecimalPlacesToDisplay(1);
-    addAndMakeVisible(transientsSlider);
-    transientsAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
-        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_TRANSIENTS, transientsSlider);
-
-    setupLabel(transientsLabel, "TRANSIENT");
-    addAndMakeVisible(transientsLabel);
-
-    // Setup sensitivity slider (Phase 2B: Transient detection threshold)
-    setupSlider(sensitivitySlider, juce::Slider::LinearHorizontal);
-    sensitivitySlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
-    sensitivitySlider.setNumDecimalPlacesToDisplay(1);
-    addAndMakeVisible(sensitivitySlider);
-    sensitivityAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
-        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_SENSITIVITY, sensitivitySlider);
-
-    setupLabel(sensitivityLabel, "SENS");
-    addAndMakeVisible(sensitivityLabel);
-
-    // Setup root note combo (just 12 pitch classes - octave is irrelevant for scale quantization)
+    // Root note selector
     for (const auto& note : { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" })
     {
         rootNoteCombo.addItem(note, rootNoteCombo.getNumItems() + 1);
@@ -484,10 +568,10 @@ FrequencyShifterEditor::FrequencyShifterEditor(FrequencyShifterProcessor& p)
     rootNoteAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
         audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_ROOT_NOTE, rootNoteCombo);
 
-    setupLabel(rootNoteLabel, "ROOT");
+    setupLabel(rootNoteLabel, "Root");
     addAndMakeVisible(rootNoteLabel);
 
-    // Setup scale type combo
+    // Scale type selector
     for (const auto& name : fshift::getScaleNames())
     {
         scaleTypeCombo.addItem(name, scaleTypeCombo.getNumItems() + 1);
@@ -496,78 +580,92 @@ FrequencyShifterEditor::FrequencyShifterEditor(FrequencyShifterProcessor& p)
     scaleTypeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
         audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_SCALE_TYPE, scaleTypeCombo);
 
-    setupLabel(scaleTypeLabel, "SCALE");
-    addAndMakeVisible(scaleTypeLabel);
+    // Quantize slider
+    setupHorizontalSlider(quantizeSlider);
+    quantizeSlider.setTextValueSuffix("");
+    addAndMakeVisible(quantizeSlider);
+    quantizeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_QUANTIZE_STRENGTH, quantizeSlider);
 
-    // Setup dry/wet slider
-    setupSlider(dryWetSlider, juce::Slider::LinearHorizontal);
-    dryWetSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
-    dryWetSlider.setNumDecimalPlacesToDisplay(1);
-    addAndMakeVisible(dryWetSlider);
-    dryWetAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
-        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_DRY_WET, dryWetSlider);
+    setupLabel(quantizeLabel, "Quantize");
+    addAndMakeVisible(quantizeLabel);
 
-    setupLabel(dryWetLabel, "DRY/WET");
-    addAndMakeVisible(dryWetLabel);
+    // Preserve slider
+    setupHorizontalSlider(preserveSlider);
+    addAndMakeVisible(preserveSlider);
+    preserveAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_PRESERVE, preserveSlider);
 
-    // Setup phase vocoder toggle
-    phaseVocoderButton.setButtonText("Enhanced Mode");
-    phaseVocoderButton.setColour(juce::ToggleButton::textColourId, juce::Colour(Colors::text));
+    setupLabel(preserveLabel, "Preserve");
+    addAndMakeVisible(preserveLabel);
+
+    // Transients slider
+    setupHorizontalSlider(transientsSlider);
+    addAndMakeVisible(transientsSlider);
+    transientsAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_TRANSIENTS, transientsSlider);
+
+    setupLabel(transientsLabel, "Transient");
+    addAndMakeVisible(transientsLabel);
+
+    // Sensitivity slider
+    setupHorizontalSlider(sensitivitySlider);
+    sensitivitySlider.setNumDecimalPlacesToDisplay(0);
+    addAndMakeVisible(sensitivitySlider);
+    sensitivityAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_SENSITIVITY, sensitivitySlider);
+
+    setupLabel(sensitivityLabel, "Sens");
+    addAndMakeVisible(sensitivityLabel);
+
+    // Enhanced mode toggle
+    phaseVocoderButton.setButtonText("Enhanced");
     addAndMakeVisible(phaseVocoderButton);
     phaseVocoderAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
         audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_PHASE_VOCODER, phaseVocoderButton);
 
-    // Setup SMEAR slider (5-123ms continuous control)
-    setupSlider(smearSlider, juce::Slider::LinearHorizontal);
-    smearSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 55, 20);
-    smearSlider.setNumDecimalPlacesToDisplay(1);
+    // SMEAR slider
+    setupHorizontalSlider(smearSlider);
     smearSlider.setTextValueSuffix(" ms");
     addAndMakeVisible(smearSlider);
     smearAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_SMEAR, smearSlider);
 
-    setupLabel(smearLabel, "SMEAR");
+    setupLabel(smearLabel, "Smear");
     addAndMakeVisible(smearLabel);
 
     // === LFO Modulation Controls ===
 
-    // LFO Depth slider
-    setupSlider(lfoDepthSlider, juce::Slider::LinearHorizontal);
-    lfoDepthSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
+    setupHorizontalSlider(lfoDepthSlider);
     lfoDepthSlider.setNumDecimalPlacesToDisplay(0);
     addAndMakeVisible(lfoDepthSlider);
     lfoDepthAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_LFO_DEPTH, lfoDepthSlider);
 
-    setupLabel(lfoDepthLabel, "DEPTH");
+    setupLabel(lfoDepthLabel, "Depth");
     addAndMakeVisible(lfoDepthLabel);
 
-    // LFO Depth Mode combo (Hz/Deg)
     lfoDepthModeCombo.addItem("Hz", 1);
-    lfoDepthModeCombo.addItem("Deg", 2);
+    lfoDepthModeCombo.addItem("Degrees", 2);
     addAndMakeVisible(lfoDepthModeCombo);
     lfoDepthModeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
         audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_LFO_DEPTH_MODE, lfoDepthModeCombo);
 
-    // LFO Rate slider
-    setupSlider(lfoRateSlider, juce::Slider::LinearHorizontal);
-    lfoRateSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
+    setupHorizontalSlider(lfoRateSlider);
+    lfoRateSlider.setTextValueSuffix(" Hz");
     lfoRateSlider.setNumDecimalPlacesToDisplay(2);
     addAndMakeVisible(lfoRateSlider);
     lfoRateAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_LFO_RATE, lfoRateSlider);
 
-    setupLabel(lfoRateLabel, "RATE");
+    setupLabel(lfoRateLabel, "Rate");
     addAndMakeVisible(lfoRateLabel);
 
-    // LFO Sync toggle
-    lfoSyncButton.setButtonText("SYNC");
-    lfoSyncButton.setColour(juce::ToggleButton::textColourId, juce::Colour(Colors::text));
+    lfoSyncButton.setButtonText("Sync");
     addAndMakeVisible(lfoSyncButton);
     lfoSyncAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
         audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_LFO_SYNC, lfoSyncButton);
 
-    // LFO Division combo (when synced)
     lfoDivisionCombo.addItem("4/1", 1);
     lfoDivisionCombo.addItem("2/1", 2);
     lfoDivisionCombo.addItem("1/1", 3);
@@ -576,17 +674,10 @@ FrequencyShifterEditor::FrequencyShifterEditor(FrequencyShifterProcessor& p)
     lfoDivisionCombo.addItem("1/8", 6);
     lfoDivisionCombo.addItem("1/16", 7);
     lfoDivisionCombo.addItem("1/32", 8);
-    lfoDivisionCombo.addItem("1/4T", 9);
-    lfoDivisionCombo.addItem("1/8T", 10);
-    lfoDivisionCombo.addItem("1/16T", 11);
-    lfoDivisionCombo.addItem("1/4.", 12);
-    lfoDivisionCombo.addItem("1/8.", 13);
-    lfoDivisionCombo.addItem("1/16.", 14);
     addAndMakeVisible(lfoDivisionCombo);
     lfoDivisionAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
         audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_LFO_DIVISION, lfoDivisionCombo);
 
-    // LFO Shape combo
     lfoShapeCombo.addItem("Sine", 1);
     lfoShapeCombo.addItem("Triangle", 2);
     lfoShapeCombo.addItem("Saw", 3);
@@ -596,162 +687,32 @@ FrequencyShifterEditor::FrequencyShifterEditor(FrequencyShifterProcessor& p)
     lfoShapeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
         audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_LFO_SHAPE, lfoShapeCombo);
 
-    setupLabel(lfoShapeLabel, "SHAPE");
-    addAndMakeVisible(lfoShapeLabel);
-
-    // Set up sync button callback to toggle between RATE slider and DIV dropdown
     lfoSyncButton.onClick = [this]() { updateLfoSyncUI(); };
-    updateLfoSyncUI();  // Initialize visibility
+    updateLfoSyncUI();
 
-    // === Delay Time LFO Controls ===
+    // === Delay Controls ===
 
-    // DLY LFO Depth slider
-    setupSlider(dlyLfoDepthSlider, juce::Slider::LinearHorizontal);
-    dlyLfoDepthSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
-    dlyLfoDepthSlider.setNumDecimalPlacesToDisplay(0);
-    addAndMakeVisible(dlyLfoDepthSlider);
-    dlyLfoDepthAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
-        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_DLY_LFO_DEPTH, dlyLfoDepthSlider);
-
-    setupLabel(dlyLfoDepthLabel, "DLY DEPTH");
-    addAndMakeVisible(dlyLfoDepthLabel);
-
-    // DLY LFO Rate slider
-    setupSlider(dlyLfoRateSlider, juce::Slider::LinearHorizontal);
-    dlyLfoRateSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
-    dlyLfoRateSlider.setNumDecimalPlacesToDisplay(2);
-    addAndMakeVisible(dlyLfoRateSlider);
-    dlyLfoRateAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
-        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_DLY_LFO_RATE, dlyLfoRateSlider);
-
-    setupLabel(dlyLfoRateLabel, "DLY RATE");
-    addAndMakeVisible(dlyLfoRateLabel);
-
-    // DLY LFO Sync toggle
-    dlyLfoSyncButton.setButtonText("SYNC");
-    dlyLfoSyncButton.setColour(juce::ToggleButton::textColourId, juce::Colour(Colors::text));
-    addAndMakeVisible(dlyLfoSyncButton);
-    dlyLfoSyncAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
-        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_DLY_LFO_SYNC, dlyLfoSyncButton);
-
-    // DLY LFO Division combo (when synced)
-    dlyLfoDivisionCombo.addItem("4/1", 1);
-    dlyLfoDivisionCombo.addItem("2/1", 2);
-    dlyLfoDivisionCombo.addItem("1/1", 3);
-    dlyLfoDivisionCombo.addItem("1/2", 4);
-    dlyLfoDivisionCombo.addItem("1/4", 5);
-    dlyLfoDivisionCombo.addItem("1/8", 6);
-    dlyLfoDivisionCombo.addItem("1/16", 7);
-    dlyLfoDivisionCombo.addItem("1/32", 8);
-    dlyLfoDivisionCombo.addItem("1/4T", 9);
-    dlyLfoDivisionCombo.addItem("1/8T", 10);
-    dlyLfoDivisionCombo.addItem("1/16T", 11);
-    dlyLfoDivisionCombo.addItem("1/4.", 12);
-    dlyLfoDivisionCombo.addItem("1/8.", 13);
-    dlyLfoDivisionCombo.addItem("1/16.", 14);
-    addAndMakeVisible(dlyLfoDivisionCombo);
-    dlyLfoDivisionAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
-        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_DLY_LFO_DIVISION, dlyLfoDivisionCombo);
-
-    // DLY LFO Shape combo
-    dlyLfoShapeCombo.addItem("Sine", 1);
-    dlyLfoShapeCombo.addItem("Triangle", 2);
-    dlyLfoShapeCombo.addItem("Saw", 3);
-    dlyLfoShapeCombo.addItem("Inv Saw", 4);
-    dlyLfoShapeCombo.addItem("Random", 5);
-    addAndMakeVisible(dlyLfoShapeCombo);
-    dlyLfoShapeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
-        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_DLY_LFO_SHAPE, dlyLfoShapeCombo);
-
-    setupLabel(dlyLfoShapeLabel, "DLY SHAPE");
-    addAndMakeVisible(dlyLfoShapeLabel);
-
-    // Set up sync button callback to toggle between RATE slider and DIV dropdown
-    dlyLfoSyncButton.onClick = [this]() { updateDlyLfoSyncUI(); };
-    updateDlyLfoSyncUI();  // Initialize visibility
-
-    // === Spectral Mask Controls ===
-
-    // Mask enabled toggle
-    maskEnabledButton.setButtonText("Mask");
-    maskEnabledButton.setColour(juce::ToggleButton::textColourId, juce::Colour(Colors::text));
-    addAndMakeVisible(maskEnabledButton);
-    maskEnabledAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
-        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_MASK_ENABLED, maskEnabledButton);
-
-    // Mask mode combo
-    maskModeCombo.addItem("Low Pass", 1);
-    maskModeCombo.addItem("High Pass", 2);
-    maskModeCombo.addItem("Band Pass", 3);
-    addAndMakeVisible(maskModeCombo);
-    maskModeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
-        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_MASK_MODE, maskModeCombo);
-
-    setupLabel(maskModeLabel, "MODE");
-    addAndMakeVisible(maskModeLabel);
-
-    // Mask low frequency slider
-    setupSlider(maskLowFreqSlider, juce::Slider::LinearHorizontal);
-    maskLowFreqSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 60, 20);
-    maskLowFreqSlider.setNumDecimalPlacesToDisplay(0);
-    addAndMakeVisible(maskLowFreqSlider);
-    maskLowFreqAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
-        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_MASK_LOW_FREQ, maskLowFreqSlider);
-
-    setupLabel(maskLowFreqLabel, "LOW");
-    addAndMakeVisible(maskLowFreqLabel);
-
-    // Mask high frequency slider
-    setupSlider(maskHighFreqSlider, juce::Slider::LinearHorizontal);
-    maskHighFreqSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 60, 20);
-    maskHighFreqSlider.setNumDecimalPlacesToDisplay(0);
-    addAndMakeVisible(maskHighFreqSlider);
-    maskHighFreqAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
-        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_MASK_HIGH_FREQ, maskHighFreqSlider);
-
-    setupLabel(maskHighFreqLabel, "HIGH");
-    addAndMakeVisible(maskHighFreqLabel);
-
-    // Mask transition slider
-    setupSlider(maskTransitionSlider, juce::Slider::LinearHorizontal);
-    maskTransitionSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
-    maskTransitionSlider.setNumDecimalPlacesToDisplay(1);
-    addAndMakeVisible(maskTransitionSlider);
-    maskTransitionAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
-        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_MASK_TRANSITION, maskTransitionSlider);
-
-    setupLabel(maskTransitionLabel, "TRANS");
-    addAndMakeVisible(maskTransitionLabel);
-
-    // === Spectral Delay Controls ===
-
-    // Delay enabled toggle
     delayEnabledButton.setButtonText("Delay");
-    delayEnabledButton.setColour(juce::ToggleButton::textColourId, juce::Colour(Colors::text));
     addAndMakeVisible(delayEnabledButton);
     delayEnabledAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
         audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_DELAY_ENABLED, delayEnabledButton);
 
-    // Delay time slider
-    setupSlider(delayTimeSlider, juce::Slider::LinearHorizontal);
-    delayTimeSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 55, 20);
-    delayTimeSlider.setNumDecimalPlacesToDisplay(0);
+    setupHorizontalSlider(delayTimeSlider);
+    delayTimeSlider.setTextValueSuffix(" ms");
+    delayTimeSlider.setNumDecimalPlacesToDisplay(1);
     addAndMakeVisible(delayTimeSlider);
     delayTimeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_DELAY_TIME, delayTimeSlider);
 
-    setupLabel(delayTimeLabel, "TIME");
+    setupLabel(delayTimeLabel, "Time");
     addAndMakeVisible(delayTimeLabel);
 
-    // Delay sync toggle
     delaySyncButton.setButtonText("Sync");
-    delaySyncButton.setColour(juce::ToggleButton::textColourId, juce::Colour(Colors::text));
     delaySyncButton.onClick = [this]() { updateDelaySyncUI(); };
     addAndMakeVisible(delaySyncButton);
     delaySyncAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
         audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_DELAY_SYNC, delaySyncButton);
 
-    // Delay division combo (tempo sync divisions)
     delayDivisionCombo.addItem("1/32", 1);
     delayDivisionCombo.addItem("1/16T", 2);
     delayDivisionCombo.addItem("1/16", 3);
@@ -772,72 +733,152 @@ FrequencyShifterEditor::FrequencyShifterEditor(FrequencyShifterProcessor& p)
     delayDivisionAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
         audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_DELAY_DIVISION, delayDivisionCombo);
 
-    setupLabel(delayDivisionLabel, "DIV");
-    addAndMakeVisible(delayDivisionLabel);
-
-    // Delay slope slider
-    setupSlider(delaySlopeSlider, juce::Slider::LinearHorizontal);
-    delaySlopeSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
-    delaySlopeSlider.setNumDecimalPlacesToDisplay(0);
-    addAndMakeVisible(delaySlopeSlider);
-    delaySlopeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
-        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_DELAY_SLOPE, delaySlopeSlider);
-
-    setupLabel(delaySlopeLabel, "SLOPE");
-    addAndMakeVisible(delaySlopeLabel);
-
-    // Delay feedback slider
-    setupSlider(delayFeedbackSlider, juce::Slider::LinearHorizontal);
-    delayFeedbackSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
-    delayFeedbackSlider.setNumDecimalPlacesToDisplay(0);
+    setupHorizontalSlider(delayFeedbackSlider);
+    delayFeedbackSlider.setNumDecimalPlacesToDisplay(1);
     addAndMakeVisible(delayFeedbackSlider);
     delayFeedbackAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_DELAY_FEEDBACK, delayFeedbackSlider);
 
-    setupLabel(delayFeedbackLabel, "FDBK");
+    setupLabel(delayFeedbackLabel, "Fdbk");
     addAndMakeVisible(delayFeedbackLabel);
 
-    // Delay damping slider
-    setupSlider(delayDampingSlider, juce::Slider::LinearHorizontal);
-    delayDampingSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
-    delayDampingSlider.setNumDecimalPlacesToDisplay(0);
+    setupHorizontalSlider(delayDampingSlider);
+    delayDampingSlider.setNumDecimalPlacesToDisplay(1);
     addAndMakeVisible(delayDampingSlider);
     delayDampingAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_DELAY_DAMPING, delayDampingSlider);
 
-    setupLabel(delayDampingLabel, "DAMP");
+    setupLabel(delayDampingLabel, "Damp");
     addAndMakeVisible(delayDampingLabel);
 
-    // WARM toggle (vintage bandwidth limiting on feedback)
-    warmButton.setButtonText("WARM");
-    warmButton.setColour(juce::ToggleButton::textColourId, juce::Colour(Colors::text));
-    addAndMakeVisible(warmButton);
-    warmAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
-        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_WARM, warmButton);
+    setupHorizontalSlider(delaySlopeSlider);
+    delaySlopeSlider.setNumDecimalPlacesToDisplay(1);
+    addAndMakeVisible(delaySlopeSlider);
+    delaySlopeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_DELAY_SLOPE, delaySlopeSlider);
 
-    // Delay diffuse slider (spectral delay wet/dry - smear effect)
-    setupSlider(delayDiffuseSlider, juce::Slider::LinearHorizontal);
-    delayDiffuseSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
-    delayDiffuseSlider.setNumDecimalPlacesToDisplay(0);
+    setupLabel(delaySlopeLabel, "Slope");
+    addAndMakeVisible(delaySlopeLabel);
+
+    setupHorizontalSlider(delayDiffuseSlider);
+    delayDiffuseSlider.setNumDecimalPlacesToDisplay(1);
     addAndMakeVisible(delayDiffuseSlider);
     delayDiffuseAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
         audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_DELAY_DIFFUSE, delayDiffuseSlider);
 
-    setupLabel(delayDiffuseLabel, "DIFFUSE");
+    setupLabel(delayDiffuseLabel, "Diffuse");
     addAndMakeVisible(delayDiffuseLabel);
 
-    // Stereo decorrelation toggle (testing feature)
-    // Applies 0.06ms delay to left channel to reduce phase-locked resonance
     stereoDecorrelateToggle.setButtonText("L/R Decorr");
-    stereoDecorrelateToggle.setColour(juce::ToggleButton::textColourId, juce::Colour(Colors::textDim));
     stereoDecorrelateToggle.onClick = [this]() {
         audioProcessor.setStereoDecorrelate(stereoDecorrelateToggle.getToggleState());
     };
     addAndMakeVisible(stereoDecorrelateToggle);
 
-    // Setup spectrum analyzer toggle
+    // === Delay Time LFO Controls ===
+
+    setupHorizontalSlider(dlyLfoDepthSlider);
+    dlyLfoDepthSlider.setNumDecimalPlacesToDisplay(0);
+    addAndMakeVisible(dlyLfoDepthSlider);
+    dlyLfoDepthAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_DLY_LFO_DEPTH, dlyLfoDepthSlider);
+
+    setupLabel(dlyLfoDepthLabel, "Depth");
+    addAndMakeVisible(dlyLfoDepthLabel);
+
+    setupHorizontalSlider(dlyLfoRateSlider);
+    dlyLfoRateSlider.setTextValueSuffix(" Hz");
+    dlyLfoRateSlider.setNumDecimalPlacesToDisplay(2);
+    addAndMakeVisible(dlyLfoRateSlider);
+    dlyLfoRateAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_DLY_LFO_RATE, dlyLfoRateSlider);
+
+    setupLabel(dlyLfoRateLabel, "Rate");
+    addAndMakeVisible(dlyLfoRateLabel);
+
+    dlyLfoSyncButton.setButtonText("Sync");
+    addAndMakeVisible(dlyLfoSyncButton);
+    dlyLfoSyncAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_DLY_LFO_SYNC, dlyLfoSyncButton);
+
+    dlyLfoDivisionCombo.addItem("4/1", 1);
+    dlyLfoDivisionCombo.addItem("2/1", 2);
+    dlyLfoDivisionCombo.addItem("1/1", 3);
+    dlyLfoDivisionCombo.addItem("1/2", 4);
+    dlyLfoDivisionCombo.addItem("1/4", 5);
+    dlyLfoDivisionCombo.addItem("1/8", 6);
+    dlyLfoDivisionCombo.addItem("1/16", 7);
+    dlyLfoDivisionCombo.addItem("1/32", 8);
+    addAndMakeVisible(dlyLfoDivisionCombo);
+    dlyLfoDivisionAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_DLY_LFO_DIVISION, dlyLfoDivisionCombo);
+
+    dlyLfoShapeCombo.addItem("Sine", 1);
+    dlyLfoShapeCombo.addItem("Triangle", 2);
+    dlyLfoShapeCombo.addItem("Saw", 3);
+    dlyLfoShapeCombo.addItem("Inv Saw", 4);
+    dlyLfoShapeCombo.addItem("Random", 5);
+    addAndMakeVisible(dlyLfoShapeCombo);
+    dlyLfoShapeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_DLY_LFO_SHAPE, dlyLfoShapeCombo);
+
+    dlyLfoSyncButton.onClick = [this]() { updateDlyLfoSyncUI(); };
+    updateDlyLfoSyncUI();
+
+    // === Spectral Mask Controls ===
+
+    maskEnabledButton.setButtonText("Mask");
+    addAndMakeVisible(maskEnabledButton);
+    maskEnabledAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_MASK_ENABLED, maskEnabledButton);
+
+    maskModeCombo.addItem("Low Pass", 1);
+    maskModeCombo.addItem("High Pass", 2);
+    maskModeCombo.addItem("Band Pass", 3);
+    addAndMakeVisible(maskModeCombo);
+    maskModeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
+        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_MASK_MODE, maskModeCombo);
+
+    setupHorizontalSlider(maskLowFreqSlider);
+    maskLowFreqSlider.setNumDecimalPlacesToDisplay(0);
+    addAndMakeVisible(maskLowFreqSlider);
+    maskLowFreqAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_MASK_LOW_FREQ, maskLowFreqSlider);
+
+    setupLabel(maskLowFreqLabel, "Low");
+    addAndMakeVisible(maskLowFreqLabel);
+
+    setupHorizontalSlider(maskHighFreqSlider);
+    maskHighFreqSlider.setNumDecimalPlacesToDisplay(0);
+    addAndMakeVisible(maskHighFreqSlider);
+    maskHighFreqAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_MASK_HIGH_FREQ, maskHighFreqSlider);
+
+    setupLabel(maskHighFreqLabel, "High");
+    addAndMakeVisible(maskHighFreqLabel);
+
+    setupHorizontalSlider(maskTransitionSlider);
+    maskTransitionSlider.setNumDecimalPlacesToDisplay(2);
+    maskTransitionSlider.setTextValueSuffix(" oct");
+    addAndMakeVisible(maskTransitionSlider);
+    maskTransitionAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_MASK_TRANSITION, maskTransitionSlider);
+
+    setupLabel(maskTransitionLabel, "Trans");
+    addAndMakeVisible(maskTransitionLabel);
+
+    // === Dry/Wet Mix ===
+
+    setupHorizontalSlider(dryWetSlider);
+    addAndMakeVisible(dryWetSlider);
+    dryWetAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+        audioProcessor.getValueTreeState(), FrequencyShifterProcessor::PARAM_DRY_WET, dryWetSlider);
+
+    setupLabel(dryWetLabel, "Dry / Wet");
+    addAndMakeVisible(dryWetLabel);
+
+    // Spectrum toggle
     spectrumButton.setButtonText("Spectrum");
-    spectrumButton.setColour(juce::ToggleButton::textColourId, juce::Colour(Colors::text));
     spectrumButton.onClick = [this]()
     {
         spectrumVisible = spectrumButton.getToggleState();
@@ -849,21 +890,18 @@ FrequencyShifterEditor::FrequencyShifterEditor(FrequencyShifterProcessor& p)
         if (spectrumAnalyzer)
             spectrumAnalyzer->setVisible(spectrumVisible);
 
-        // Resize window when spectrum is toggled
         if (spectrumVisible)
-            setSize(640, 900);
+            setSize(600, 950);
         else
-            setSize(640, 740);
+            setSize(600, 800);
     };
     addAndMakeVisible(spectrumButton);
 
-    // Set editor size (increased for delay time LFO controls)
-    setSize(640, 740);
+    // Set editor size (600px width as per mockup)
+    setSize(600, 800);
 
-    // Initialize delay sync UI state
+    // Initialize UI states
     updateDelaySyncUI();
-
-    // Initialize mode-dependent control states
     updateControlsForMode();
 }
 
@@ -873,191 +911,277 @@ FrequencyShifterEditor::~FrequencyShifterEditor()
     setLookAndFeel(nullptr);
 }
 
-void FrequencyShifterEditor::setupLabel(juce::Label& label, const juce::String& text)
+void FrequencyShifterEditor::setupLabel(juce::Label& label, const juce::String& text, bool isSection)
 {
     label.setText(text, juce::dontSendNotification);
-    label.setFont(juce::FontOptions(12.0f).withStyle("Bold"));
-    label.setColour(juce::Label::textColourId, juce::Colour(Colors::textDim));
-    label.setJustificationType(juce::Justification::centred);
+    if (isSection)
+    {
+        label.setFont(juce::FontOptions(8.0f));
+        label.setColour(juce::Label::textColourId, juce::Colour(Colors::textMuted));
+    }
+    else
+    {
+        label.setFont(juce::FontOptions(9.0f));
+        label.setColour(juce::Label::textColourId, juce::Colour(Colors::textSec));
+    }
+    label.setJustificationType(juce::Justification::centredRight);
 }
 
 void FrequencyShifterEditor::setupSlider(juce::Slider& slider, juce::Slider::SliderStyle style)
 {
     slider.setSliderStyle(style);
-    slider.setColour(juce::Slider::rotarySliderFillColourId, juce::Colour(Colors::accent));
-    slider.setColour(juce::Slider::rotarySliderOutlineColourId, juce::Colour(Colors::knobBackground));
     slider.setColour(juce::Slider::textBoxTextColourId, juce::Colour(Colors::text));
-    slider.setColour(juce::Slider::textBoxBackgroundColourId, juce::Colour(Colors::knobBackground));
+    slider.setColour(juce::Slider::textBoxBackgroundColourId, juce::Colours::transparentBlack);
     slider.setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
+}
+
+void FrequencyShifterEditor::setupHorizontalSlider(juce::Slider& slider)
+{
+    slider.setSliderStyle(juce::Slider::LinearHorizontal);
+    slider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 52, 20);
+    slider.setNumDecimalPlacesToDisplay(1);
+    slider.setColour(juce::Slider::textBoxTextColourId, juce::Colour(Colors::text));
+    slider.setColour(juce::Slider::textBoxBackgroundColourId, juce::Colours::transparentBlack);
+    slider.setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
+}
+
+void FrequencyShifterEditor::drawStrip(juce::Graphics& g, int y, int height,
+                                        const juce::String& label, bool hasBorder, bool dimmed)
+{
+    auto stripBounds = juce::Rectangle<float>(0, static_cast<float>(y),
+                                               static_cast<float>(getWidth()), static_cast<float>(height));
+
+    // Strip background
+    g.setColour(juce::Colour(Colors::strip).withAlpha(dimmed ? 0.3f : 1.0f));
+    g.fillRect(stripBounds);
+
+    // Top border
+    if (hasBorder)
+    {
+        g.setColour(juce::Colour(Colors::stripBorder));
+        g.drawHorizontalLine(y, 0, static_cast<float>(getWidth()));
+    }
 }
 
 void FrequencyShifterEditor::paint(juce::Graphics& g)
 {
-    // Background gradient
-    juce::ColourGradient gradient(juce::Colour(Colors::background), 0, 0,
-                                   juce::Colour(Colors::panelBackground), 0, static_cast<float>(getHeight()),
-                                   false);
-    g.setGradientFill(gradient);
-    g.fillAll();
+    // Main background
+    g.fillAll(juce::Colour(Colors::background));
 
-    // Title
+    // Top accent line (gold gradient)
+    {
+        juce::ColourGradient gradient(
+            juce::Colours::transparentBlack, 0, 0,
+            juce::Colours::transparentBlack, static_cast<float>(getWidth()), 0,
+            false);
+        gradient.addColour(0.08, juce::Colours::transparentBlack);
+        gradient.addColour(0.3, juce::Colour(Colors::accentDim));
+        gradient.addColour(0.5, juce::Colour(Colors::accent));
+        gradient.addColour(0.7, juce::Colour(Colors::accentDim));
+        gradient.addColour(0.92, juce::Colours::transparentBlack);
+        g.setGradientFill(gradient);
+        g.fillRect(0, 0, getWidth(), 1);
+    }
+
+    // Title - "Holy Shifter" with serif font
     g.setColour(juce::Colour(Colors::text));
-    g.setFont(juce::FontOptions(24.0f).withStyle("Bold"));
-    g.drawText("FREQUENCY SHIFTER", 0, 10, getWidth(), 30, juce::Justification::centred);
+    g.setFont(juce::FontOptions(22.0f).withStyle("Light"));
+    g.drawText("H O L Y   S H I F T E R", 24, 16, 300, 28, juce::Justification::centredLeft, false);
 
     // Subtitle
-    g.setColour(juce::Colour(Colors::textDim));
-    g.setFont(juce::FontOptions(12.0f));
-    g.drawText("Harmonic-preserving pitch shift", 0, 35, getWidth(), 20, juce::Justification::centred);
+    g.setColour(juce::Colour(Colors::textMuted));
+    g.setFont(juce::FontOptions(10.0f).withStyle("Italic"));
+    g.drawText("Frequency Shifter with Harmonic Quantisation", 24, 42, 350, 14,
+               juce::Justification::centredLeft, false);
 
-    // Panel backgrounds
-    g.setColour(juce::Colour(Colors::panelBackground).withAlpha(0.5f));
+    // Mode indicator (right side of title bar)
+    bool isSpectral = (processingModeCombo.getSelectedId() == 2);
+    g.setColour(juce::Colour(isSpectral ? Colors::accent : Colors::textMuted));
+    g.setFont(juce::FontOptions(8.0f));
+    g.drawText(isSpectral ? "SPECTRAL" : "CLASSIC", getWidth() - 100, 20, 80, 12,
+               juce::Justification::centredRight, false);
 
-    // Main shift panel
-    g.fillRoundedRectangle(20.0f, 65.0f, 200.0f, 200.0f, 10.0f);
+    // Spectral panel background
+    g.setColour(juce::Colour(Colors::panelBg));
+    g.fillRoundedRectangle(208.0f, 70.0f, 368.0f, 150.0f, 6.0f);
+    g.setColour(juce::Colour(Colors::panelBorder));
+    g.drawRoundedRectangle(208.0f, 70.0f, 368.0f, 150.0f, 6.0f, 1.0f);
 
-    // Controls panel
-    g.fillRoundedRectangle(240.0f, 65.0f, 380.0f, 200.0f, 10.0f);
+    // Strip sections
+    int stripY = 230;
 
-    // Mix & Drift panel (now taller to fit stochastic row)
-    g.fillRoundedRectangle(20.0f, 280.0f, 600.0f, 150.0f, 10.0f);
+    // Smear & Enhance strip
+    drawStrip(g, stripY, 50, "Smear & Enhance", true, !isSpectral);
+    g.setColour(juce::Colour(Colors::textMuted));
+    g.setFont(juce::FontOptions(8.0f));
+    g.drawText("SMEAR & ENHANCE", 24, stripY + 4, 150, 12, juce::Justification::centredLeft, false);
+    stripY += 50;
 
-    // Mask panel (two rows)
-    g.fillRoundedRectangle(20.0f, 440.0f, 600.0f, 80.0f, 10.0f);
+    // Freq Modulation strip
+    drawStrip(g, stripY, 70, "Freq Modulation", true, false);
+    g.setColour(juce::Colour(Colors::textMuted));
+    g.drawText("FREQ MODULATION", 24, stripY + 4, 150, 12, juce::Justification::centredLeft, false);
+    stripY += 70;
 
-    // Delay panel (two rows)
-    g.fillRoundedRectangle(20.0f, 530.0f, 600.0f, 70.0f, 10.0f);
+    // Delay strip
+    drawStrip(g, stripY, 130, "Delay", true, false);
+    g.setColour(juce::Colour(Colors::textMuted));
+    g.drawText("DELAY", 24, stripY + 4, 100, 12, juce::Justification::centredLeft, false);
+    stripY += 130;
 
-    // Spectrum panel (when visible)
-    if (spectrumVisible)
+    // Delay Modulation strip
+    drawStrip(g, stripY, 70, "Delay Modulation", true, false);
+    g.setColour(juce::Colour(Colors::textMuted));
+    g.drawText("DELAY MODULATION", 24, stripY + 4, 150, 12, juce::Justification::centredLeft, false);
+    stripY += 70;
+
+    // Mask strip
+    drawStrip(g, stripY, 80, "Mask", true, !isSpectral);
+    g.setColour(juce::Colour(Colors::textMuted));
+    g.drawText("MASK", 24, stripY + 4, 100, 12, juce::Justification::centredLeft, false);
+    stripY += 80;
+
+    // Mix strip
+    drawStrip(g, stripY, 50, "Mix", true, false);
+    stripY += 50;
+
+    // Bottom accent line
     {
-        g.fillRoundedRectangle(20.0f, 610.0f, 600.0f, 150.0f, 10.0f);
+        juce::ColourGradient gradient(
+            juce::Colours::transparentBlack, 0, static_cast<float>(getHeight() - 1),
+            juce::Colours::transparentBlack, static_cast<float>(getWidth()), static_cast<float>(getHeight() - 1),
+            false);
+        gradient.addColour(0.15, juce::Colours::transparentBlack);
+        gradient.addColour(0.5, juce::Colour(Colors::borderDim));
+        gradient.addColour(0.85, juce::Colours::transparentBlack);
+        g.setGradientFill(gradient);
+        g.fillRect(0, getHeight() - 1, getWidth(), 1);
     }
 }
 
 void FrequencyShifterEditor::resized()
 {
-    // Mode toggle at top
-    processingModeLabel.setBounds(30, 45, 50, 20);
-    processingModeCombo.setBounds(80, 43, 100, 24);
-    warmButton.setBounds(190, 43, 70, 24);
+    const int margin = 24;
+    const int rowHeight = 24;
+    const int labelWidth = 55;
+    const int sliderWidth = 200;
 
-    // Main shift knob - large, centered in left panel
-    shiftSlider.setBounds(45, 85, 150, 150);
-    shiftLabel.setBounds(45, 235, 150, 20);
+    // Title bar controls
+    processingModeCombo.setBounds(208, 78, 96, 22);
+    warmButton.setBounds(getWidth() - margin - 80, 36, 80, 22);
 
-    // Scale controls - right panel
-    const int rightPanelX = 260;
-    const int labelWidth = 80;
-    const int controlWidth = 250;
+    // Main shift knob (left side)
+    shiftSlider.setBounds(24, 70, 180, 180);
 
-    rootNoteLabel.setBounds(rightPanelX, 80, labelWidth, 20);
-    rootNoteCombo.setBounds(rightPanelX + labelWidth, 78, controlWidth, 24);
+    // Spectral panel controls (right side)
+    int panelX = 220;
+    int panelY = 108;
+    int panelRowGap = 26;
 
-    scaleTypeLabel.setBounds(rightPanelX, 115, labelWidth, 20);
-    scaleTypeCombo.setBounds(rightPanelX + labelWidth, 113, controlWidth, 24);
+    rootNoteLabel.setBounds(panelX, panelY, 35, 20);
+    rootNoteCombo.setBounds(panelX + 40, panelY, 58, 22);
+    scaleTypeCombo.setBounds(panelX + 105, panelY, 128, 22);
+    panelY += panelRowGap;
 
-    quantizeLabel.setBounds(rightPanelX, 150, labelWidth, 20);
-    quantizeSlider.setBounds(rightPanelX + labelWidth, 148, controlWidth, 24);
+    quantizeLabel.setBounds(panelX, panelY, 52, 20);
+    quantizeSlider.setBounds(panelX + 55, panelY, 180, 20);
+    panelY += panelRowGap;
 
-    // Phase 2B: Envelope preservation (near QUANTIZE)
-    preserveLabel.setBounds(rightPanelX, 180, labelWidth, 20);
-    preserveSlider.setBounds(rightPanelX + labelWidth, 178, controlWidth, 24);
+    preserveLabel.setBounds(panelX, panelY, 52, 20);
+    preserveSlider.setBounds(panelX + 55, panelY, 180, 20);
+    panelY += panelRowGap;
 
-    // Phase 2B: Transient controls (on same row, split width)
-    const int transientControlWidth = 115;
-    transientsLabel.setBounds(rightPanelX, 210, 65, 20);
-    transientsSlider.setBounds(rightPanelX + 65, 208, transientControlWidth, 24);
+    transientsLabel.setBounds(panelX, panelY, 52, 20);
+    transientsSlider.setBounds(panelX + 55, panelY, 100, 20);
+    sensitivityLabel.setBounds(panelX + 160, panelY, 30, 20);
+    sensitivitySlider.setBounds(panelX + 190, panelY, 80, 20);
 
-    sensitivityLabel.setBounds(rightPanelX + 190, 210, 40, 20);
-    sensitivitySlider.setBounds(rightPanelX + 230, 208, transientControlWidth, 24);
+    // Strip sections
+    int stripY = 230;
+    int stripPadding = 20;
 
-    phaseVocoderButton.setBounds(rightPanelX, 245, 200, 24);
+    // Smear & Enhance strip
+    phaseVocoderButton.setBounds(margin, stripY + stripPadding, 90, 22);
+    smearLabel.setBounds(margin + 100, stripY + stripPadding, 38, 20);
+    smearSlider.setBounds(margin + 145, stripY + stripPadding, getWidth() - margin * 2 - 155, 20);
+    stripY += 50;
 
-    smearLabel.setBounds(rightPanelX, 280, labelWidth, 20);
-    smearSlider.setBounds(rightPanelX + labelWidth, 278, controlWidth, 24);
+    // Freq Modulation strip
+    int lfoY = stripY + stripPadding;
+    lfoDepthLabel.setBounds(margin, lfoY, 38, 20);
+    lfoDepthSlider.setBounds(margin + 45, lfoY, 140, 20);
+    lfoDepthModeCombo.setBounds(margin + 195, lfoY, 72, 22);
 
-    // Mix controls - bottom panel row 1 (shifted down by 60 to accommodate new controls)
-    dryWetLabel.setBounds(40, 355, 70, 20);
-    dryWetSlider.setBounds(110, 353, 380, 24);
-    spectrumButton.setBounds(510, 353, 100, 24);
+    lfoY += 26;
+    lfoRateLabel.setBounds(margin, lfoY, 38, 20);
+    lfoRateSlider.setBounds(margin + 45, lfoY, 140, 20);
+    lfoSyncButton.setBounds(margin + 200, lfoY, 70, 22);
+    lfoDivisionCombo.setBounds(margin + 280, lfoY, 58, 22);
+    lfoShapeCombo.setBounds(getWidth() - margin - 78, lfoY, 78, 22);
+    stripY += 70;
 
-    // LFO controls - bottom panel row 2
-    lfoDepthLabel.setBounds(40, 390, 50, 20);
-    lfoDepthSlider.setBounds(90, 388, 130, 24);
-    lfoDepthModeCombo.setBounds(225, 388, 55, 24);
+    // Delay strip
+    int delY = stripY + stripPadding;
+    delayEnabledButton.setBounds(margin, delY, 70, 22);
+    delayTimeLabel.setBounds(margin + 80, delY, 38, 20);
+    delayTimeSlider.setBounds(margin + 125, delY, 140, 20);
+    delaySyncButton.setBounds(margin + 280, delY, 70, 22);
+    delayDivisionCombo.setBounds(margin + 360, delY, 58, 22);
 
-    lfoRateLabel.setBounds(295, 390, 40, 20);
-    lfoRateSlider.setBounds(335, 388, 100, 24);
+    delY += 26;
+    delayFeedbackLabel.setBounds(margin, delY, 38, 20);
+    delayFeedbackSlider.setBounds(margin + 45, delY, 120, 20);
+    delayDampingLabel.setBounds(margin + 175, delY, 38, 20);
+    delayDampingSlider.setBounds(margin + 220, delY, 120, 20);
 
-    lfoSyncButton.setBounds(445, 388, 60, 24);
-    lfoDivisionCombo.setBounds(505, 388, 70, 24);
+    delY += 26;
+    delaySlopeLabel.setBounds(margin, delY, 38, 20);
+    delaySlopeSlider.setBounds(margin + 45, delY, 120, 20);
+    delayDiffuseLabel.setBounds(margin + 175, delY, 48, 20);
+    delayDiffuseSlider.setBounds(margin + 228, delY, 120, 20);
 
-    // LFO controls - bottom panel row 3
-    lfoShapeLabel.setBounds(40, 425, 50, 20);
-    lfoShapeCombo.setBounds(90, 423, 100, 24);
+    delY += 26;
+    stereoDecorrelateToggle.setBounds(getWidth() - margin - 100, delY, 100, 20);
+    stripY += 130;
 
-    // Delay LFO controls - bottom panel row 4
-    dlyLfoDepthLabel.setBounds(40, 460, 70, 20);
-    dlyLfoDepthSlider.setBounds(110, 458, 130, 24);
+    // Delay Modulation strip
+    int dlyLfoY = stripY + stripPadding;
+    dlyLfoDepthLabel.setBounds(margin, dlyLfoY, 38, 20);
+    dlyLfoDepthSlider.setBounds(margin + 45, dlyLfoY, 140, 20);
 
-    dlyLfoRateLabel.setBounds(255, 460, 60, 20);
-    dlyLfoRateSlider.setBounds(315, 458, 100, 24);
+    dlyLfoY += 26;
+    dlyLfoRateLabel.setBounds(margin, dlyLfoY, 38, 20);
+    dlyLfoRateSlider.setBounds(margin + 45, dlyLfoY, 140, 20);
+    dlyLfoSyncButton.setBounds(margin + 200, dlyLfoY, 70, 22);
+    dlyLfoDivisionCombo.setBounds(margin + 280, dlyLfoY, 58, 22);
+    dlyLfoShapeCombo.setBounds(getWidth() - margin - 78, dlyLfoY, 78, 22);
+    stripY += 70;
 
-    dlyLfoSyncButton.setBounds(425, 458, 60, 24);
-    dlyLfoDivisionCombo.setBounds(485, 458, 70, 24);
+    // Mask strip
+    int maskY = stripY + stripPadding;
+    maskEnabledButton.setBounds(margin, maskY, 70, 22);
+    maskModeCombo.setBounds(margin + 80, maskY, 88, 22);
+    maskTransitionLabel.setBounds(margin + 180, maskY, 34, 20);
+    maskTransitionSlider.setBounds(margin + 220, maskY, 120, 20);
 
-    // Delay LFO controls - bottom panel row 5
-    dlyLfoShapeLabel.setBounds(40, 495, 70, 20);
-    dlyLfoShapeCombo.setBounds(110, 493, 100, 24);
+    maskY += 26;
+    maskLowFreqLabel.setBounds(margin, maskY, 24, 20);
+    maskLowFreqSlider.setBounds(margin + 30, maskY, 200, 20);
+    maskHighFreqLabel.setBounds(margin + 245, maskY, 28, 20);
+    maskHighFreqSlider.setBounds(margin + 280, maskY, 200, 20);
+    stripY += 80;
 
-    // Mask controls - row 1: toggle, mode, transition
-    maskEnabledButton.setBounds(30, 545, 60, 24);
+    // Mix strip
+    int mixY = stripY + 12;
+    dryWetLabel.setBounds(margin, mixY, 55, 20);
+    dryWetSlider.setBounds(margin + 65, mixY, getWidth() - margin * 2 - 180, 20);
+    spectrumButton.setBounds(getWidth() - margin - 100, mixY, 100, 22);
+    stripY += 50;
 
-    maskModeLabel.setBounds(100, 547, 45, 20);
-    maskModeCombo.setBounds(145, 545, 100, 24);
-
-    maskTransitionLabel.setBounds(260, 547, 45, 20);
-    maskTransitionSlider.setBounds(305, 545, 120, 24);
-
-    // Mask controls - row 2: low and high frequency (wider sliders)
-    maskLowFreqLabel.setBounds(30, 582, 35, 20);
-    maskLowFreqSlider.setBounds(65, 580, 250, 24);
-
-    maskHighFreqLabel.setBounds(330, 582, 40, 20);
-    maskHighFreqSlider.setBounds(370, 580, 240, 24);
-
-    // Delay controls - row 1: toggle, time, sync, division, slope
-    delayEnabledButton.setBounds(30, 635, 60, 24);
-
-    delayTimeLabel.setBounds(95, 637, 35, 20);
-    delayTimeSlider.setBounds(130, 635, 120, 24);
-
-    delaySyncButton.setBounds(255, 635, 55, 24);
-
-    delayDivisionLabel.setBounds(310, 637, 25, 20);
-    delayDivisionCombo.setBounds(335, 635, 70, 24);
-
-    delaySlopeLabel.setBounds(415, 637, 45, 20);
-    delaySlopeSlider.setBounds(460, 635, 150, 24);
-
-    // Delay controls - row 2: feedback, damping, diffuse, mix
-    delayFeedbackLabel.setBounds(30, 667, 35, 20);
-    delayFeedbackSlider.setBounds(65, 665, 100, 24);
-
-    delayDampingLabel.setBounds(175, 667, 40, 20);
-    delayDampingSlider.setBounds(215, 665, 90, 24);
-
-    delayDiffuseLabel.setBounds(315, 667, 55, 20);
-    delayDiffuseSlider.setBounds(370, 665, 90, 24);
-
-    // Stereo decorrelation toggle (bottom right corner - testing feature)
-    stereoDecorrelateToggle.setBounds(520, 690, 110, 20);
-
-    // Spectrum analyzer (below main controls when visible)
+    // Spectrum analyzer (when visible)
     if (spectrumAnalyzer && spectrumVisible)
     {
-        spectrumAnalyzer->setBounds(20, 715, 600, 145);
+        spectrumAnalyzer->setBounds(margin, stripY + 10, getWidth() - margin * 2, 130);
     }
 }
 
@@ -1065,8 +1189,6 @@ void FrequencyShifterEditor::sliderValueChanged(juce::Slider* slider)
 {
     if (slider == &shiftSlider)
     {
-        // Manual sync: Get the slider value and update the parameter directly
-        // (SliderAttachment doesn't work with custom log scale ranges)
         float value = static_cast<float>(shiftSlider.getValue());
         auto* param = audioProcessor.getValueTreeState().getParameter(FrequencyShifterProcessor::PARAM_SHIFT_HZ);
         if (param != nullptr)
@@ -1082,58 +1204,51 @@ void FrequencyShifterEditor::updateDelaySyncUI()
 {
     bool syncEnabled = delaySyncButton.getToggleState();
 
-    // When SYNC is ON: disable TIME slider, enable DIV dropdown
-    // When SYNC is OFF: enable TIME slider, disable DIV dropdown
     delayTimeSlider.setEnabled(!syncEnabled);
-    delayTimeSlider.setAlpha(syncEnabled ? 0.4f : 1.0f);
-    delayTimeLabel.setAlpha(syncEnabled ? 0.4f : 1.0f);
+    delayTimeSlider.setAlpha(syncEnabled ? 0.35f : 1.0f);
+    delayTimeLabel.setAlpha(syncEnabled ? 0.35f : 1.0f);
 
     delayDivisionCombo.setEnabled(syncEnabled);
-    delayDivisionCombo.setAlpha(syncEnabled ? 1.0f : 0.4f);
-    delayDivisionLabel.setAlpha(syncEnabled ? 1.0f : 0.4f);
+    delayDivisionCombo.setAlpha(syncEnabled ? 1.0f : 0.35f);
 }
 
 void FrequencyShifterEditor::updateLfoSyncUI()
 {
     bool syncEnabled = lfoSyncButton.getToggleState();
 
-    // When SYNC is ON: disable RATE slider, enable DIV dropdown
-    // When SYNC is OFF: enable RATE slider, disable DIV dropdown
     lfoRateSlider.setEnabled(!syncEnabled);
-    lfoRateSlider.setAlpha(syncEnabled ? 0.4f : 1.0f);
-    lfoRateLabel.setAlpha(syncEnabled ? 0.4f : 1.0f);
+    lfoRateSlider.setAlpha(syncEnabled ? 0.35f : 1.0f);
+    lfoRateLabel.setAlpha(syncEnabled ? 0.35f : 1.0f);
 
     lfoDivisionCombo.setEnabled(syncEnabled);
-    lfoDivisionCombo.setAlpha(syncEnabled ? 1.0f : 0.4f);
+    lfoDivisionCombo.setAlpha(syncEnabled ? 1.0f : 0.35f);
 }
 
 void FrequencyShifterEditor::updateDlyLfoSyncUI()
 {
     bool syncEnabled = dlyLfoSyncButton.getToggleState();
 
-    // When SYNC is ON: disable RATE slider, enable DIV dropdown
-    // When SYNC is OFF: enable RATE slider, disable DIV dropdown
     dlyLfoRateSlider.setEnabled(!syncEnabled);
-    dlyLfoRateSlider.setAlpha(syncEnabled ? 0.4f : 1.0f);
-    dlyLfoRateLabel.setAlpha(syncEnabled ? 0.4f : 1.0f);
+    dlyLfoRateSlider.setAlpha(syncEnabled ? 0.35f : 1.0f);
+    dlyLfoRateLabel.setAlpha(syncEnabled ? 0.35f : 1.0f);
 
     dlyLfoDivisionCombo.setEnabled(syncEnabled);
-    dlyLfoDivisionCombo.setAlpha(syncEnabled ? 1.0f : 0.4f);
+    dlyLfoDivisionCombo.setAlpha(syncEnabled ? 1.0f : 0.35f);
 }
 
 void FrequencyShifterEditor::updateControlsForMode()
 {
-    // Classic mode (ID=1) disables Spectral-only controls
+    // Classic is ID=1, Spectral is ID=2 (matching processor's 0=Classic, 1=Spectral)
     bool isClassic = (processingModeCombo.getSelectedId() == 1);
-    float disabledAlpha = 0.4f;
+    float disabledAlpha = 0.25f;
     float enabledAlpha = 1.0f;
 
-    // SMEAR - Spectral only (FFT size control)
+    // SMEAR - Spectral only
     smearSlider.setEnabled(!isClassic);
     smearSlider.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
     smearLabel.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
 
-    // Quantize, Root, Scale - Spectral only (harmonic quantization)
+    // Quantize, Root, Scale - Spectral only
     quantizeSlider.setEnabled(!isClassic);
     quantizeSlider.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
     quantizeLabel.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
@@ -1144,9 +1259,8 @@ void FrequencyShifterEditor::updateControlsForMode()
 
     scaleTypeCombo.setEnabled(!isClassic);
     scaleTypeCombo.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
-    scaleTypeLabel.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
 
-    // PRESERVE, TRANSIENTS, SENSITIVITY - Spectral only (envelope preservation)
+    // PRESERVE, TRANSIENTS, SENSITIVITY - Spectral only
     preserveSlider.setEnabled(!isClassic);
     preserveSlider.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
     preserveLabel.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
@@ -1159,7 +1273,7 @@ void FrequencyShifterEditor::updateControlsForMode()
     sensitivitySlider.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
     sensitivityLabel.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
 
-    // LFO Depth Mode (Hz/Degrees) - Degrees mode only useful with quantization
+    // LFO Depth Mode - Spectral only
     lfoDepthModeCombo.setEnabled(!isClassic);
     lfoDepthModeCombo.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
 
@@ -1173,7 +1287,6 @@ void FrequencyShifterEditor::updateControlsForMode()
 
     maskModeCombo.setEnabled(!isClassic);
     maskModeCombo.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
-    maskModeLabel.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
 
     maskLowFreqSlider.setEnabled(!isClassic);
     maskLowFreqSlider.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
@@ -1195,5 +1308,7 @@ void FrequencyShifterEditor::updateControlsForMode()
     delayDiffuseSlider.setEnabled(!isClassic);
     delayDiffuseSlider.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
     delayDiffuseLabel.setAlpha(isClassic ? disabledAlpha : enabledAlpha);
-}
 
+    // Trigger repaint to update strip dimming
+    repaint();
+}

@@ -41,30 +41,14 @@ private:
     static constexpr float ceilingAttackRate = 0.3f;  // How fast ceiling rises to meet peaks
     static constexpr float ceilingDecayRate = 0.998f;  // How slowly ceiling falls
 
-    // Colors
-    static constexpr juce::uint32 backgroundColor = 0xFF1A1A2E;
-    static constexpr juce::uint32 gridColor = 0xFF2A2A3E;
-    static constexpr juce::uint32 spectrumColor = 0xFF7AA2F7;
-    static constexpr juce::uint32 spectrumFillColor = 0x407AA2F7;
-    static constexpr juce::uint32 textColor = 0xFF6C7086;
-
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SpectrumAnalyzer)
 };
 
 /**
  * FrequencyShifterEditor - GUI for the Frequency Shifter plugin.
  *
- * Provides a clean, modern interface with:
- * - Large frequency shift knob with Hz display
- * - Scale quantization controls
- * - Root note and scale type selection
- * - Dry/wet mix control
- * - Enhanced phase vocoder toggle
- *
- * UI Design Notes:
- * - The interface is designed for easy customization later
- * - Uses JUCE's LookAndFeel for consistent styling
- * - All controls are attached to AudioProcessorValueTreeState parameters
+ * "Holy Shifter" - Frequency Shifter with Harmonic Quantisation
+ * Dark theme with gold/amber accent color.
  */
 class FrequencyShifterEditor : public juce::AudioProcessorEditor,
                                private juce::Slider::Listener
@@ -77,11 +61,11 @@ public:
     void resized() override;
 
 private:
-    // Custom look and feel for modern appearance
-    class ModernLookAndFeel : public juce::LookAndFeel_V4
+    // Custom look and feel for Holy Shifter aesthetic
+    class HolyShifterLookAndFeel : public juce::LookAndFeel_V4
     {
     public:
-        ModernLookAndFeel();
+        HolyShifterLookAndFeel();
 
         void drawRotarySlider(juce::Graphics& g, int x, int y, int width, int height,
                               float sliderPosProportional, float rotaryStartAngle,
@@ -90,23 +74,39 @@ private:
         void drawLinearSlider(juce::Graphics& g, int x, int y, int width, int height,
                               float sliderPos, float minSliderPos, float maxSliderPos,
                               juce::Slider::SliderStyle style, juce::Slider& slider) override;
+
+        void drawToggleButton(juce::Graphics& g, juce::ToggleButton& button,
+                              bool shouldDrawButtonAsHighlighted,
+                              bool shouldDrawButtonAsDown) override;
+
+        void drawComboBox(juce::Graphics& g, int width, int height, bool isButtonDown,
+                          int buttonX, int buttonY, int buttonW, int buttonH,
+                          juce::ComboBox& box) override;
+
+        void drawPopupMenuItem(juce::Graphics& g, const juce::Rectangle<int>& area,
+                               bool isSeparator, bool isActive, bool isHighlighted,
+                               bool isTicked, bool hasSubMenu,
+                               const juce::String& text, const juce::String& shortcutKeyText,
+                               const juce::Drawable* icon, const juce::Colour* textColour) override;
     };
 
-    // Helper to create a styled label
-    void setupLabel(juce::Label& label, const juce::String& text);
-
-    // Helper to create a styled slider
+    // Helper functions
+    void setupLabel(juce::Label& label, const juce::String& text, bool isSection = false);
     void setupSlider(juce::Slider& slider, juce::Slider::SliderStyle style);
+    void setupHorizontalSlider(juce::Slider& slider);
+
+    // Strip section drawing helper
+    void drawStrip(juce::Graphics& g, int y, int height, const juce::String& label = "",
+                   bool hasBorder = true, bool dimmed = false);
 
     // Reference to processor
     FrequencyShifterProcessor& audioProcessor;
 
     // Custom look and feel
-    ModernLookAndFeel modernLookAndFeel;
+    HolyShifterLookAndFeel holyLookAndFeel;
 
     // Processing Mode toggle (Classic vs Spectral)
     juce::ComboBox processingModeCombo;
-    juce::Label processingModeLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> processingModeAttachment;
     void updateControlsForMode();  // Enable/disable Spectral-only controls
 
@@ -116,7 +116,6 @@ private:
 
     // Main frequency shift control
     juce::Slider shiftSlider;
-    juce::Label shiftLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> shiftAttachment;
 
     // Quantization control
@@ -144,7 +143,6 @@ private:
 
     // Scale type selector
     juce::ComboBox scaleTypeCombo;
-    juce::Label scaleTypeLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> scaleTypeAttachment;
 
     // Dry/wet mix
@@ -180,7 +178,6 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> lfoDivisionAttachment;
 
     juce::ComboBox lfoShapeCombo;
-    juce::Label lfoShapeLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> lfoShapeAttachment;
 
     // Helper to toggle between RATE slider and DIV dropdown based on SYNC state
@@ -202,7 +199,6 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> dlyLfoDivisionAttachment;
 
     juce::ComboBox dlyLfoShapeCombo;
-    juce::Label dlyLfoShapeLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> dlyLfoShapeAttachment;
 
     // Helper to toggle between RATE slider and DIV dropdown based on DLY SYNC state
@@ -221,7 +217,6 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> maskEnabledAttachment;
 
     juce::ComboBox maskModeCombo;
-    juce::Label maskModeLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> maskModeAttachment;
 
     juce::Slider maskLowFreqSlider;
@@ -248,7 +243,6 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> delaySyncAttachment;
 
     juce::ComboBox delayDivisionCombo;
-    juce::Label delayDivisionLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> delayDivisionAttachment;
 
     // Timer to update UI state based on sync toggle
@@ -273,18 +267,35 @@ private:
     // Stereo decorrelation toggle (testing feature)
     juce::ToggleButton stereoDecorrelateToggle;
 
-    // UI colors (for easy customization)
+public:
+    // UI colors - Holy Shifter color scheme (public for SpectrumAnalyzer access)
     struct Colors
     {
-        static constexpr juce::uint32 background = 0xFF1E1E2E;
-        static constexpr juce::uint32 panelBackground = 0xFF2A2A3E;
-        static constexpr juce::uint32 accent = 0xFF7AA2F7;
-        static constexpr juce::uint32 accentSecondary = 0xFF9ECE6A;
-        static constexpr juce::uint32 text = 0xFFCDD6F4;
-        static constexpr juce::uint32 textDim = 0xFF6C7086;
-        static constexpr juce::uint32 knobBackground = 0xFF313244;
-        static constexpr juce::uint32 knobForeground = 0xFF45475A;
+        // Background colors
+        static constexpr juce::uint32 background = 0xFF0A0A0C;
+        static constexpr juce::uint32 surface = 0xFF111113;
+        static constexpr juce::uint32 strip = 0xFF0E0E10;
+        static constexpr juce::uint32 stripBorder = 0xFF1A1A1D;
+        static constexpr juce::uint32 raised = 0xFF161618;
+        static constexpr juce::uint32 border = 0xFF1E1E22;
+        static constexpr juce::uint32 borderDim = 0xFF151517;
+        static constexpr juce::uint32 panelBg = 0xFF0D0D0F;
+        static constexpr juce::uint32 panelBorder = 0xFF1C1C20;
+
+        // Text colors
+        static constexpr juce::uint32 text = 0xFFE8E4DB;
+        static constexpr juce::uint32 textSec = 0xFF8A857D;
+        static constexpr juce::uint32 textMuted = 0xFF3E3A34;
+
+        // Accent colors (gold/amber)
+        static constexpr juce::uint32 accent = 0xFFC9A96E;
+        static constexpr juce::uint32 accentDim = 0xFF6B5D3D;
+        static constexpr juce::uint32 accentGlow = 0x26C9A96E;
+
+        // Track color
+        static constexpr juce::uint32 track = 0xFF252320;
     };
 
+private:
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(FrequencyShifterEditor)
 };
