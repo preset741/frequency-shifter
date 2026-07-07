@@ -271,6 +271,7 @@ void PresetManager::initFactoryPresets()
         {"lfoDepth", 0.5f},
         {"lfoRate", 0.15f},
         {"lfoShape", 0.0f},  // Sine
+        {"lfoEnabled", 1.0f},  // R3 enable toggle — without this the LFO is silent
         {"delayEnabled", 0.0f},
         {"maskEnabled", 0.0f},
         {"warm", 0.0f}
@@ -285,6 +286,7 @@ void PresetManager::initFactoryPresets()
         {"lfoDepth", 2.0f},
         {"lfoRate", 0.3f},
         {"lfoShape", 0.0f},  // Sine
+        {"lfoEnabled", 1.0f},  // R3 enable toggle — without this the LFO is silent
         {"delayEnabled", 0.0f},
         {"maskEnabled", 0.0f},
         {"warm", 1.0f}
@@ -298,6 +300,7 @@ void PresetManager::initFactoryPresets()
         {"lfoDepth", 3.0f},
         {"lfoRate", 0.8f},
         {"lfoShape", 0.0f},  // Sine
+        {"lfoEnabled", 1.0f},  // R3 enable toggle — without this the LFO is silent
         {"delayEnabled", 1.0f},
         {"delayTime", 30.0f},
         {"delayFeedback", 20.0f},
@@ -305,6 +308,7 @@ void PresetManager::initFactoryPresets()
         {"dlyLfoDepth", 8.0f},
         {"dlyLfoRate", 0.5f},
         {"dlyLfoShape", 0.0f},
+        {"dlyLfoEnabled", 1.0f},  // R3 enable toggle — without this the delay LFO is silent
         {"maskEnabled", 0.0f},
         {"warm", 0.0f}
     }));
@@ -354,6 +358,7 @@ void PresetManager::initFactoryPresets()
         {"dlyLfoDepth", 15.0f},
         {"dlyLfoRate", 0.4f},
         {"dlyLfoShape", 0.0f},
+        {"dlyLfoEnabled", 1.0f},  // R3 enable toggle — without this the delay LFO is silent
         {"maskEnabled", 0.0f},
         {"warm", 1.0f}
     }));

@@ -147,3 +147,41 @@ TEST_CASE("STFT: behaves consistently across sample rates", "[stft][sr-sweep]")
         REQUIRE(peakAmp > bgRms * 10.0);  // 20 dB SNR floor
     }
 }
+
+TEST_CASE("STFT: forward->inverse->overlap-add reconstructs at unity gain (COLA)", "[stft][istft]")
+{
+    // Regression for the missing WOLA normalization: the Hann window is applied on BOTH
+    // analysis and synthesis, so an un-normalized overlap-add left a constant +3.52 dB
+    // (x1.5) gain on the whole spectral wet path. A pass-through round trip must be unity.
+    for (int fftSize : {256, 512, 1024, 2048})
+    {
+        const int hop = fftSize / 4;                 // 75% overlap
+        const double sr = 44100.0;
+        STFT s(fftSize, hop);
+        s.prepare(sr);
+
+        const int total = fftSize * 8;
+        auto input = sineWave(total, 440.0f, static_cast<float>(sr));
+        std::vector<float> out(static_cast<size_t>(total), 0.0f);
+
+        for (int start = 0; start + fftSize <= total; start += hop)
+        {
+            std::vector<float> frame(input.begin() + start, input.begin() + start + fftSize);
+            auto [mag, phase] = s.forward(frame);
+            auto rec = s.inverse(mag, phase);        // identity spectral processing
+            for (int i = 0; i < fftSize; ++i)
+                out[static_cast<size_t>(start + i)] += rec[static_cast<size_t>(i)];
+        }
+
+        // Steady-state region only (full 4x overlap): [fftSize, total - fftSize)
+        double eIn = 0.0, eOut = 0.0;
+        for (int n = fftSize; n < total - fftSize; ++n)
+        {
+            eIn  += static_cast<double>(input[static_cast<size_t>(n)]) * input[static_cast<size_t>(n)];
+            eOut += static_cast<double>(out[static_cast<size_t>(n)]) * out[static_cast<size_t>(n)];
+        }
+        double gain = std::sqrt(eOut / eIn);
+        INFO("FFT size: " << fftSize << "  reconstruction gain: " << gain);
+        REQUIRE(gain == Approx(1.0).margin(0.02));
+    }
+}

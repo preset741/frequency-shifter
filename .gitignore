@@ -30,6 +30,7 @@
 build/
 plugin/build/
 plugin/dist/
+plugin/dist-wv/
 build-ios*/
 plugin/build-ios*/
 plugin/build-visage-check/

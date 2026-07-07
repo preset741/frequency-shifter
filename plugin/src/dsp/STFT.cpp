@@ -100,6 +100,17 @@ void STFT::createWindow()
 
         windowSquared[i] = window[i] * window[i];
     }
+
+    // WOLA normalization: for a constant-overlap-add window the per-output-sample sum of
+    // the analysis*synthesis window product is constant and equals sum(w^2)/hop. Divide the
+    // synthesis frame by it so a pass-through round trip is unity gain. (Hann @ 75% overlap:
+    // sum(w^2) = 0.375*fftSize, hop = fftSize/4 -> factor 1.5, i.e. the old +3.52 dB.)
+    double windowSquaredSum = 0.0;
+    for (float ws : windowSquared)
+        windowSquaredSum += static_cast<double>(ws);
+
+    const double colaGain = windowSquaredSum / static_cast<double>(hopSize);
+    synthesisScale = (colaGain > 1.0e-9) ? static_cast<float>(1.0 / colaGain) : 1.0f;
 }
 
 std::pair<std::vector<float>, std::vector<float>> STFT::forward(const std::vector<float>& inputFrame)
@@ -154,11 +165,11 @@ std::vector<float> STFT::inverse(const std::vector<float>& magnitude, const std:
     // Perform inverse FFT
     ifft(fftBuffer);
 
-    // Extract real part and apply window
+    // Extract real part and apply synthesis window + WOLA normalization (see synthesisScale).
     std::vector<float> outputFrame(fftSize);
     for (int i = 0; i < fftSize; ++i)
     {
-        outputFrame[i] = fftBuffer[i].real() * window[i];
+        outputFrame[i] = fftBuffer[i].real() * window[i] * synthesisScale;
     }
 
     return outputFrame;

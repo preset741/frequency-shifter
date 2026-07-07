@@ -266,10 +266,10 @@ private:
     // Silent frame counter per MIDI note - tracks how long since significant energy
     // Resets phase accumulator after SILENCE_FRAMES_TO_RESET consecutive silent frames
     std::array<int, NUM_MIDI_NOTES> silentFrameCount{};
-    static constexpr int SILENCE_FRAMES_TO_RESET = 8;  // ~185ms at 44.1kHz with 1024 hop
+    static constexpr int SILENCE_FRAMES_TO_RESET = 4;  // halve the phase-accumulator ring-out after a note decays
 
     // Magnitude threshold for "active" note (linear, roughly -60dB)
-    static constexpr float MAGNITUDE_THRESHOLD = 0.001f;
+    static constexpr float MAGNITUDE_THRESHOLD = 0.004f;  // ~-48dB: declare a decaying note silent sooner (was -60dB)
 
     // Cached parameters for phase increment calculation
     double cachedSampleRate = 0.0;

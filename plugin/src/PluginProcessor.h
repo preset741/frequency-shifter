@@ -157,7 +157,10 @@ private:
 
     // Arrays: [channel][processor_index]
     std::array<std::array<std::unique_ptr<fshift::STFT>, NUM_PROCESSORS>, MAX_CHANNELS> stftProcessors;
-    std::unique_ptr<fshift::MusicalQuantizer> quantizer;
+    // Per-channel quantizers. Each owns its own per-MIDI-note phase accumulators and
+    // transient/peak history, so stereo channels don't share (and double-advance) that
+    // temporal state — the shared single instance detuned quantized notes in stereo.
+    std::array<std::unique_ptr<fshift::MusicalQuantizer>, MAX_CHANNELS> quantizers;
     fshift::SpectralMask spectralMask;
     std::array<std::array<fshift::SpectralDelay, NUM_PROCESSORS>, MAX_CHANNELS> spectralDelays;
 
@@ -178,7 +181,7 @@ private:
     std::atomic<int> lfoDepthMode{ 0 };       // 0 = Hz, 1 = Degrees
     std::atomic<float> lfoRate{ 1.0f };       // 0.01-60 Hz when not synced
     std::atomic<bool> lfoSync{ false };       // Tempo sync on/off
-    std::atomic<int> lfoDivision{ 4 };        // Tempo division index (default 1/4)
+    std::atomic<int> lfoDivision{ 5 };        // Tempo division index 5 = 1/4 (matches param-layout default)
     std::atomic<int> lfoShape{ 0 };           // 0=Sine, 1=Tri, 2=Saw, 3=InvSaw, 4=Random
     std::atomic<bool> lfoEnabled{ false };    // R3: LFO on/off (default off, like the delay)
 
@@ -212,7 +215,7 @@ private:
     std::atomic<float> dlyLfoDepth{ 0.0f };    // 0-1000 ms
     std::atomic<float> dlyLfoRate{ 1.0f };     // 0.01-20 Hz when not synced
     std::atomic<bool> dlyLfoSync{ false };     // Tempo sync on/off
-    std::atomic<int> dlyLfoDivision{ 4 };      // Tempo division index (default 1/4)
+    std::atomic<int> dlyLfoDivision{ 5 };      // Tempo division index 5 = 1/4 (matches param-layout default)
     std::atomic<int> dlyLfoShape{ 0 };         // 0=Sine, 1=Tri, 2=Saw, 3=InvSaw, 4=Random
     std::atomic<bool> dlyLfoEnabled{ false };  // R3: delay LFO on/off (default off)
 
@@ -229,7 +232,7 @@ private:
     std::atomic<bool> delayEnabled{ false };
     std::atomic<float> delayTime{ 200.0f };
     std::atomic<bool> delaySync{ false };      // Tempo sync on/off
-    std::atomic<int> delayDivision{ 8 };       // Default to 1/4 note (index 8)
+    std::atomic<int> delayDivision{ 5 };       // Tempo division index 5 = 1/4 (matches param-layout default)
     std::atomic<float> delaySlope{ 0.0f };
     std::atomic<double> hostBpm{ 120.0 };      // Cached host tempo
     std::atomic<float> delayFeedback{ 30.0f };
@@ -279,6 +282,15 @@ private:
     // Envelope follower coefficients (computed in prepareToPlay)
     float envAttackCoeff = 0.0f;   // ~1ms attack
     float envReleaseCoeff = 0.0f;  // ~50ms release
+
+    // "Tones Only" (peak-snap) amplitude-envelope imposition state. The source's fast amplitude
+    // envelope (from the latency-aligned dry input, used ONLY as a control signal) is imposed on
+    // the fully-shifted wet, so the source's punch and dynamics survive without any dry signal
+    // entering the output — the audio stays 100% the effect. See processBlock for the gain law.
+    std::array<float, MAX_CHANNELS> srcEnv{};   // source (control-only) amplitude envelope
+    std::array<float, MAX_CHANNELS> wetEnv{};   // wet (shifted) amplitude envelope
+    float punchEnvAtkCoeff = 0.0f;   // ~0.5ms — catch the onset
+    float punchEnvRelCoeff = 0.0f;   // ~50ms — track decays, duck the ringing tail
 
     // Processing state
     double currentSampleRate = 44100.0;

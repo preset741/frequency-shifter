@@ -141,3 +141,39 @@ TEST_CASE("MusicalQuantizer: stable across sample rates with the same musical co
         for (float m : outMag) REQUIRE(std::isfinite(m));
     }
 }
+
+TEST_CASE("MusicalQuantizer: a shift is applied even when quantize strength is 0", "[quantizer][shift]")
+{
+    // Regression: the low-effective-strength early-out used to return the ORIGINAL spectrum
+    // whenever effectiveStrength <= 0.001, ignoring shiftHz. That made the Shift knob dead at
+    // Quantize 0% (and caused a pitch snap-back to the unshifted signal on transients). A pure
+    // shift (strength 0) must still move spectral energy upward.
+    const int fftSize = 1024;
+    const double sr = 44100.0;
+    const float binRes = static_cast<float>(sr) / fftSize;
+    const int numBins = fftSize / 2 + 1;
+
+    MusicalQuantizer q(60, ScaleType::Major);
+    q.prepare(sr, fftSize, fftSize / 4);
+
+    const int srcBin = 20;                              // ~861 Hz
+    std::vector<float> mag(static_cast<size_t>(numBins), 0.0f);
+    std::vector<float> phase(static_cast<size_t>(numBins), 0.0f);
+    mag[static_cast<size_t>(srcBin)] = 1.0f;
+
+    auto argmax = [](const std::vector<float>& v) {
+        int bi = 0; float bv = -1.0f;
+        for (int i = 0; i < static_cast<int>(v.size()); ++i)
+            if (v[i] > bv) { bv = v[i]; bi = i; }
+        return bi;
+    };
+
+    const float shift = 200.0f;                         // +200 Hz
+    auto [outMag, _phase] = q.quantizeSpectrum(mag, phase, sr, fftSize, shift, /*strength=*/0.0f);
+
+    int outBin = argmax(outMag);
+    int expectBin = static_cast<int>(std::lround((srcBin * binRes + shift) / binRes));
+    INFO("out peak bin " << outBin << ", expected ~" << expectBin);
+    REQUIRE(outBin > srcBin);                           // energy actually moved (the fix)
+    REQUIRE(std::abs(outBin - expectBin) <= 2);         // ...to roughly the shifted frequency
+}

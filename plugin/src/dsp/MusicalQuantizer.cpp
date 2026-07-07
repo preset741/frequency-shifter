@@ -607,10 +607,13 @@ std::pair<std::vector<float>, std::vector<float>> MusicalQuantizer::quantizeSpec
     // transientFactor = 1.0 means full transient, reduce strength toward 0
     float effectiveStrength = strength * (1.0f - transientFactor);
 
-    // If effective strength is very low, just return original
-    if (effectiveStrength <= 0.001f)
+    // Only bail out when there is genuinely nothing to do: no scale snap AND no shift.
+    // A nonzero shift with (near-)zero effective strength still needs the distribution loop
+    // below, which applies the pure continuous shift (target freq == srcFreq == binFreq+shiftHz).
+    // Returning unconditionally here used to make the Shift knob dead at Quantize 0% and caused
+    // a pitch snap-back to the unshifted signal on transients (effectiveStrength -> 0 on attacks).
+    if (effectiveStrength <= 0.001f && std::abs(shiftHz) < 0.001f)
     {
-        // Still need to update transient detection state for next frame
         return { magnitude, phase };
     }
 
@@ -651,7 +654,6 @@ std::pair<std::vector<float>, std::vector<float>> MusicalQuantizer::quantizeSpec
     // main-lobe skirt to the snapped scale frequency as a rigid unit, and let the
     // non-peak ("noise") bins pass straight through (scaled by noiseMix). The shared
     // downstream stages (phase continuity + PhaseTex, envelope) then apply as usual.
-    float attack = 0.0f;  // peak-mode attack factor (hoisted; drives the transient passthrough)
     if (peakSnapEnabled)
     {
         // 1. Peak detection: local maxima above a sensitivity-controlled threshold.
@@ -659,18 +661,18 @@ std::pair<std::vector<float>, std::vector<float>> MusicalQuantizer::quantizeSpec
         for (int k = 1; k < numBins; ++k)
             maxMag = std::max(maxMag, magnitude[static_cast<size_t>(k)]);
 
-        // Attack detection: a sharp rise in total energy vs the previous frame = a transient.
-        // We use it to let the broadband residual through at full level so percussion punches
-        // (a transient lives in the noise bins, not the peaks). attack: 0 at <=1.5x, 1 at >=3.5x.
-        if (peakPrevEnergy > 1e-9f)
-            attack = std::clamp((energyBefore / peakPrevEnergy - 1.5f) / 2.0f, 0.0f, 1.0f);
-        peakPrevEnergy = energyBefore;
-        float effNoiseMix = noiseMix + attack * (1.0f - noiseMix);  // -> full residual on attacks
+        // The non-tonal "residual" body passes at a high fixed level so the source's broadband
+        // timbre survives instead of collapsing to a sparse sine-bank (the "quieter sine-wavy"
+        // complaint). The attack is NOT manufactured here anymore: a real transient the long STFT
+        // window has already smeared cannot be rebuilt spectrally, so punch is reinjected from the
+        // latency-aligned DRY signal in PluginProcessor's mix (transient-gated). noiseMix is now
+        // the dry-injection amount ("Texture") consumed there, not a residual scaler.
+        const float effNoiseMix = 0.85f;
 
         // sensitivity 0 -> only peaks within ~18 dB of the max; 1 -> down to ~72 dB.
         float thresholdDb = -18.0f - peakSnapSensitivity * 54.0f;
         float peakThreshold = maxMag * std::pow(10.0f, thresholdDb / 20.0f);
-        float stickyThreshold = peakThreshold * 0.5f;  // -6 dB existence-hysteresis band
+        float stickyThreshold = peakThreshold * 0.7f;  // tighter existence-hysteresis so tails let go sooner
 
         std::vector<bool> isTonal(static_cast<size_t>(numBins), false);
         std::vector<int> peakBins;
@@ -801,7 +803,7 @@ std::pair<std::vector<float>, std::vector<float>> MusicalQuantizer::quantizeSpec
             if (midiNoteMagnitude[static_cast<size_t>(m)] > MAGNITUDE_THRESHOLD)
                 midiNoteActivity[static_cast<size_t>(m)] = 1.0f;
             else
-                midiNoteActivity[static_cast<size_t>(m)] *= 0.6f;
+                midiNoteActivity[static_cast<size_t>(m)] *= 0.45f;  // faster decay -> tonal tails stop ringing sooner
         }
     }
     else
@@ -1061,7 +1063,11 @@ std::pair<std::vector<float>, std::vector<float>> MusicalQuantizer::quantizeSpec
                         // the snapped tonal peaks lock FULLY to the clean accumulator (retain 0,
                         // no PhaseTex) — steady in-tune tones instead of the fizzy/gritty phase
                         // jitter PhaseTex causes on already-moving peaks. Per-bin mode keeps it.
-                        float retain = peakSnapEnabled ? 0.0f : PHASE_TEXTURE_RETAIN;
+                        // In peak-snap, a full lock (retain 0) turned every snapped tone into a
+                        // dead-steady coherent sine that rings out as a "phasey/feedbacky" tail.
+                        // Retain a slice of the source's real phase so tails decorrelate and decay
+                        // with the source instead of sustaining.
+                        float retain = peakSnapEnabled ? 0.20f : PHASE_TEXTURE_RETAIN;
                         float phaseLockAmount = effectiveStrength * (1.0f - retain);
                         outputPhase = inputPhase + phaseLockAmount * phaseDiff;
 

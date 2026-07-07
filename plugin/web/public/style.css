@@ -53,6 +53,8 @@ input, .preset-edit { -webkit-user-select:text; user-select:text; cursor:text; }
 .panel .hairline { position:absolute; left:1px; top:1px; right:1px; height:2px;
   background:rgba(201,169,110,.12); }
 .dimmed { opacity:.35; pointer-events:none; }
+/* mode-off = Classic-mode dimming; a separate class so it never fights the enable-dim (.dimmed) */
+.mode-off { opacity:.35; pointer-events:none; }
 
 /* logo */
 .logo { object-fit:contain; }

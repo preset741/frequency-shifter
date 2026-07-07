@@ -67,8 +67,9 @@ FrequencyShifterProcessor::FrequencyShifterProcessor()
     for (int i = 0; i < 12; ++i)
         scaleNotes[i].store(true);
 
-    // Initialize quantizer with default scale (C Major)
-    quantizer = std::make_unique<fshift::MusicalQuantizer>(60, fshift::ScaleType::Major);
+    // Initialize per-channel quantizers with default scale (C Major)
+    for (auto& q : quantizers)
+        q = std::make_unique<fshift::MusicalQuantizer>(60, fshift::ScaleType::Major);
 }
 
 FrequencyShifterProcessor::~FrequencyShifterProcessor()
@@ -571,13 +572,11 @@ void FrequencyShifterProcessor::parameterChanged(const juce::String& parameterID
         if (noteIdx >= 0 && noteIdx < 12)
         {
             scaleNotes[noteIdx].store(newValue > 0.5f);
-            if (quantizer)
-            {
-                std::array<bool, 12> notes;
-                for (int i = 0; i < 12; ++i)
-                    notes[i] = scaleNotes[i].load();
-                quantizer->setActiveNotes(notes);
-            }
+            std::array<bool, 12> notes;
+            for (int i = 0; i < 12; ++i)
+                notes[i] = scaleNotes[i].load();
+            for (auto& q : quantizers)
+                if (q) q->setActiveNotes(notes);
         }
     }
     else if (parameterID == PARAM_DRY_WET)
@@ -719,39 +718,39 @@ void FrequencyShifterProcessor::parameterChanged(const juce::String& parameterID
     else if (parameterID == PARAM_PRESERVE)
     {
         preserveAmount.store(newValue / 100.0f);
-        if (quantizer)
-            quantizer->setPreserveAmount(newValue / 100.0f);
+        for (auto& q : quantizers)
+            if (q) q->setPreserveAmount(newValue / 100.0f);
     }
     else if (parameterID == PARAM_TRANSIENTS)
     {
         transientAmount.store(newValue / 100.0f);
-        if (quantizer)
-            quantizer->setTransientAmount(newValue / 100.0f);
+        for (auto& q : quantizers)
+            if (q) q->setTransientAmount(newValue / 100.0f);
     }
     else if (parameterID == PARAM_SENSITIVITY)
     {
         transientSensitivity.store(newValue / 100.0f);
-        if (quantizer)
-            quantizer->setTransientSensitivity(newValue / 100.0f);
+        for (auto& q : quantizers)
+            if (q) q->setTransientSensitivity(newValue / 100.0f);
     }
     else if (parameterID == PARAM_PEAK_SNAP)
     {
         bool on = newValue > 0.5f;
         peakSnapEnabled.store(on);
-        if (quantizer)
-            quantizer->setPeakSnap(on);
+        for (auto& q : quantizers)
+            if (q) q->setPeakSnap(on);
     }
     else if (parameterID == PARAM_NOISE_MIX)
     {
         noiseMix.store(newValue / 100.0f);
-        if (quantizer)
-            quantizer->setNoiseMix(newValue / 100.0f);
+        for (auto& q : quantizers)
+            if (q) q->setNoiseMix(newValue / 100.0f);
     }
     else if (parameterID == PARAM_PEAK_SENS)
     {
         peakSensitivity.store(newValue / 100.0f);
-        if (quantizer)
-            quantizer->setPeakSensitivity(newValue / 100.0f);
+        for (auto& q : quantizers)
+            if (q) q->setPeakSensitivity(newValue / 100.0f);
     }
     else if (parameterID == PARAM_PROCESSING_MODE)
     {
@@ -788,6 +787,15 @@ void FrequencyShifterProcessor::prepareToPlay(double sampleRate, int samplesPerB
     // Reset envelope states
     inputEnvelope.fill(0.0f);
     outputEnvelope.fill(0.0f);
+
+    // "Tones Only" amplitude-envelope imposition: one-pole coeffs (exp(-1/(fs*tau))).
+    auto onePole = [sr = static_cast<float>(sampleRate)](float ms) {
+        return std::exp(-1.0f / (sr * ms / 1000.0f));
+    };
+    punchEnvAtkCoeff = onePole(0.5f);
+    punchEnvRelCoeff = onePole(50.0f);
+    srcEnv.fill(0.0f);
+    wetEnv.fill(0.0f);
 
     // Initialize delay time smoother (~5ms one-pole for glitch-free LFO modulation)
     float smoothTimeMs = 5.0f;
@@ -947,11 +955,10 @@ void FrequencyShifterProcessor::reinitializeDsp()
     smoothedQuantizeStrength  = quantizeStrength.load();
     smoothedLfoRate           = lfoRate.load();
 
-    // Prepare quantizer with primary FFT settings for phase continuity (Phase 2A.3)
-    if (quantizer)
-    {
-        quantizer->prepare(currentSampleRate, currentFftSizes[0], currentHopSizes[0]);
-    }
+    // Prepare per-channel quantizers with primary FFT settings for phase continuity (Phase 2A.3)
+    for (auto& q : quantizers)
+        if (q)
+            q->prepare(currentSampleRate, currentFftSizes[0], currentHopSizes[0]);
 
     // Pre-compute spectral mask curve with max FFT size
     spectralMask.computeMaskCurve(currentSampleRate, MAX_FFT_SIZE);
@@ -1246,6 +1253,11 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
     // The slider reads its position, not a literal %, and quant never drops below 0.2.
     const float currentQuantizeStrength = 0.2f + 0.8f * rawQuantizeStrength;
     const float currentDryWet = dryWetMix.load();
+    // "Tones Only" (peak-snap) envelope-imposition controls: Texture = depth (how strongly the
+    // source's amplitude envelope is imposed on the shifted wet); Density = max attack boost.
+    const bool  currentPeakSnap = peakSnapEnabled.load();
+    const float currentTexture  = noiseMix.load();          // 0..1, imposition depth
+    const float currentDensity  = peakSensitivity.load();   // 0..1, attack-boost ceiling
     const bool currentMaskEnabled = maskEnabled.load();
     const bool currentWarmEnabled = warmEnabled.load();
 
@@ -1399,7 +1411,7 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
             // Degrees mode: convert to Hz based on quantizer intervals
             // 1 degree = 1 scale step, approximate as semitone ratio
             // For now, use 100 cents per degree as approximation
-            if (currentQuantizeStrength > 0.01f && quantizer)
+            if (currentQuantizeStrength > 0.01f && quantizers[0])
             {
                 // Use quantizer to get Hz per degree
                 float baseFreq = 440.0f;  // Reference frequency
@@ -1843,9 +1855,9 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
                         std::vector<float> inputEnvelope;
                         const std::vector<float>* envelopePtr = nullptr;
                         float currentPreserve = preserveAmount.load();
-                        if (currentPreserve > 0.01f && quantizer && currentQuantizeStrength > 0.01f)
+                        if (currentPreserve > 0.01f && quantizers[channel] && currentQuantizeStrength > 0.01f)
                         {
-                            inputEnvelope = quantizer->getSpectralEnvelope(magnitude, currentSampleRate, fftSize);
+                            inputEnvelope = quantizers[channel]->getSpectralEnvelope(magnitude, currentSampleRate, fftSize);
                             envelopePtr = &inputEnvelope;
                         }
 
@@ -1854,10 +1866,10 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
                         // and the two-nearest-scale-tone crossfade glides smoothly as the knob
                         // moves. Phase coherence comes from the quantizer's per-MIDI-note phase
                         // accumulators.
-                        if (quantizer &&
+                        if (quantizers[channel] &&
                             (currentQuantizeStrength > 0.01f || std::abs(currentShiftHz) > 0.01f))
                         {
-                            std::tie(magnitude, phase) = quantizer->quantizeSpectrum(
+                            std::tie(magnitude, phase) = quantizers[channel]->quantizeSpectrum(
                                 magnitude, phase, currentSampleRate, fftSize,
                                 currentShiftHz, currentQuantizeStrength,
                                 nullptr, envelopePtr,
@@ -2140,6 +2152,27 @@ void FrequencyShifterProcessor::processBlock(juce::AudioBuffer<float>& buffer, j
                     warmState[2] = warmOutput;
 
                     wetSample = warmOutput;
+                }
+
+                // "Tones Only": impose the SOURCE's amplitude envelope on the fully-shifted wet.
+                // The long STFT window smears the attack and the phase-lock rings out; here we
+                // reshape the wet's LOUDNESS contour to follow the source — sharp onset, pre-echo
+                // gated (src env ~0 before the hit), tail ducked when the source has decayed but
+                // the wet still rings — WITHOUT mixing any dry signal into the output. The audio
+                // stays 100% the effect; delayedDrySample is only a control reference.
+                // Texture = depth of the effect; Density = how much attack boost is allowed.
+                if (currentPeakSnap && currentTexture > 0.0001f)
+                {
+                    const float srcAbs = std::abs(delayedDrySample);
+                    const float wetAbs = std::abs(wetSample);
+                    float& se = srcEnv[static_cast<size_t>(channel)];
+                    float& we = wetEnv[static_cast<size_t>(channel)];
+                    se = srcAbs + ((srcAbs > se) ? punchEnvAtkCoeff : punchEnvRelCoeff) * (se - srcAbs);
+                    we = wetAbs + ((wetAbs > we) ? punchEnvAtkCoeff : punchEnvRelCoeff) * (we - wetAbs);
+
+                    const float maxGain = 2.0f + currentDensity * 10.0f;          // up to ~+21 dB
+                    const float ratio   = juce::jlimit(0.1f, maxGain, se / (we + 1.0e-6f));
+                    wetSample *= 1.0f + currentTexture * (ratio - 1.0f);          // Texture = depth
                 }
 
                 // Mix delayed dry with wet

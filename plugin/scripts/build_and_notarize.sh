@@ -32,17 +32,21 @@ NOTARY_PROFILE="notary-profile"
 
 # NOTE: PLUGIN_NAME must match PRODUCT_NAME in CMakeLists.txt (currently "Holy Shifter",
 # no version suffix). The built bundles are "${PLUGIN_NAME}.vst3" / ".component".
-PLUGIN_NAME="Holy Shifter"
-PKG_IDENTIFIER="com.harmonictools.frequencyshifter"
-PKG_VERSION="1.0.8"
+# Overridable via env so this script can build either UI variant:
+#   default            -> Visage build  ("Holy Shifter",   code Fshf)
+#   HOLY_SHIFTER_USE_WEBVIEW=ON PLUGIN_NAME="Holy Shifter WV" -> WebView build (code Fswv)
+PLUGIN_NAME="${PLUGIN_NAME:-Holy Shifter}"
+PKG_IDENTIFIER="${PKG_IDENTIFIER:-com.harmonictools.frequencyshifter}"
+PKG_VERSION="0.2.4"  # keep in sync with project(... VERSION) in plugin/CMakeLists.txt
+HOLY_SHIFTER_USE_WEBVIEW="${HOLY_SHIFTER_USE_WEBVIEW:-OFF}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(dirname "$SCRIPT_DIR")"
-DIST_DIR="${PLUGIN_DIR}/dist"
+DIST_DIR="${DIST_DIR:-${PLUGIN_DIR}/dist}"
 PKG_ROOT="${DIST_DIR}/pkg-root"
 
 # Build in /tmp to avoid Finder/Spotlight metadata contamination
-BUILD_DIR="/tmp/holy-shifter-build"
+BUILD_DIR="${BUILD_DIR:-/tmp/holy-shifter-build}"
 
 # ── Color output ──────────────────────────────────────────────────────────────
 GREEN='\033[0;32m'
@@ -84,6 +88,7 @@ cmake -B "$BUILD_DIR" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
     -DCMAKE_OSX_DEPLOYMENT_TARGET="11.0" \
+    -DHOLY_SHIFTER_USE_WEBVIEW="${HOLY_SHIFTER_USE_WEBVIEW}" \
     "$PLUGIN_DIR"
 
 cmake --build "$BUILD_DIR" --config Release -j "$(sysctl -n hw.logicalcpu)"

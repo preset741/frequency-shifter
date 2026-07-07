@@ -116,6 +116,12 @@ private:
 
     std::vector<float> window;
     std::vector<float> windowSquared;
+    // Weighted-overlap-add (WOLA) synthesis gain. The window is applied on BOTH analysis
+    // and synthesis, so a plain overlap-add sums w^2 and leaves a constant gain of
+    // (sum(w^2) / hop). Dividing the synthesis frame by that constant makes an
+    // identity forward->inverse->overlap-add round trip unity gain (was +3.52 dB for
+    // Hann at 75% overlap). Computed once in createWindow().
+    float synthesisScale = 1.0f;
     std::vector<std::complex<float>> fftBuffer;
 
     // Pre-computed twiddle factors for FFT (scalar fallback path only)

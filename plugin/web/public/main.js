@@ -106,6 +106,20 @@ function slider(id, x, y, w, h, opts = {}) {
     return v.toFixed(dec) + (opts.suffix || "");
   };
   const divData = () => { const choices = (divSt.properties && divSt.properties.choices) || []; return { choices, idx: divSt.getChoiceIndex(), n: choices.length }; };
+  // Optional geometric/log travel (rate sliders): slider position p maps to
+  // value = start * (end/start)^p. JUCE's WebView bridge only transmits a single
+  // skew (= 1 for our lambda-defined ranges), so the log curve is applied here in
+  // the UI. Needs start > 0; until valid range props arrive we fall back to the
+  // stock linear (skew = 1) mapping. Depth sliders omit opts.log and are unchanged.
+  const logOK = () => opts.log && st.properties.start > 0 && st.properties.end > st.properties.start;
+  const posFromVal = (v) => {
+    const { start, end } = st.properties;
+    return Math.min(1, Math.max(0, Math.log(v / start) / Math.log(end / start)));
+  };
+  const valFromPos = (p) => {
+    const { start, end } = st.properties;
+    return start * Math.pow(end / start, p);
+  };
   const render = () => {
     if (synced()) {
       const { choices, idx, n } = divData();
@@ -113,14 +127,22 @@ function slider(id, x, y, w, h, opts = {}) {
       fill.style.width = (vis * 100) + "%"; dot.style.left = (vis * 100) + "%";
       val.textContent = choices[idx] != null ? choices[idx] : "";
     } else {
-      const n = st.getNormalisedValue(); fill.style.width = (n * 100) + "%"; dot.style.left = (n * 100) + "%"; val.textContent = fmtFree();
+      const n = logOK() ? posFromVal(st.getScaledValue()) : st.getNormalisedValue();
+      fill.style.width = (n * 100) + "%"; dot.style.left = (n * 100) + "%"; val.textContent = fmtFree();
     }
   };
   const setFromX = (clientX) => {
     const vis = trackFrac(trk, clientX);   // zoom-correct fraction across the track
     if (synced()) { const { n } = divData(); const norm = sync.reversed ? 1 - vis : vis;
       divSt.setChoiceIndex(Math.max(0, Math.min(n - 1, Math.round(norm * (n - 1))))); render(); }
-    else { st.setNormalisedValue(vis); fill.style.width = (vis * 100) + "%"; dot.style.left = (vis * 100) + "%"; val.textContent = fmtFree(); }
+    else {
+      // For a log slider, convert the geometric value back into the skew = 1
+      // normalised space the host expects, so the parameter receives start*(end/start)^vis.
+      let n = vis;
+      if (logOK()) { const { start, end } = st.properties; n = (valFromPos(vis) - start) / (end - start); }
+      st.setNormalisedValue(n);
+      fill.style.width = (vis * 100) + "%"; dot.style.left = (vis * 100) + "%"; val.textContent = fmtFree();
+    }
   };
   let dragging = false;
   trk.addEventListener("pointerdown", (e) => { dragging = true; trk.setPointerCapture(e.pointerId); if (!synced()) st.sliderDragStarted(); setFromX(e.clientX); });
@@ -336,22 +358,29 @@ presetBar();
 toggleSwitch("warm", 591, 107, 80, 24, "WARM");
 shiftKnob(27, 168, 210, 218);
 
-// spectral panel controls
-piano(258, 185, 400, 42);
-slider("quantizeStrength", 322, 237, 334, 20, { decimals: 1 });
-slider("preserve", 322, 267, 334, 20, { decimals: 1 });
-slider("transients", 322, 297, 130, 18, { decimals: 1 });
-slider("sensitivity", 516, 297, 140, 18, { decimals: 0 });
-const peakSnapEl = toggleSwitch("peakSnap", 258, 319, 170, 16, "Tones Only");
-const noiseSld = slider("noiseMix", 322, 340, 130, 16, { decimals: 0 });
+// spectral panel controls (refs captured so mode-dimming can grey + DISABLE them in Classic —
+// they are siblings of `panel`, not children, so dimming the panel background alone does nothing)
+const pianoEl     = piano(258, 185, 400, 42);
+const quantSld    = slider("quantizeStrength", 322, 237, 334, 20, { decimals: 1 });
+const preserveSld = slider("preserve", 322, 267, 334, 20, { decimals: 1 });
+const transSld    = slider("transients", 322, 297, 130, 18, { decimals: 1 });
+const sensSld     = slider("sensitivity", 516, 297, 140, 18, { decimals: 0 });
+const peakSnapEl  = toggleSwitch("peakSnap", 258, 319, 170, 16, "Tones Only");
+const noiseSld    = slider("noiseMix", 322, 340, 130, 16, { decimals: 0 });
 const peakSensSld = slider("peakSens", 520, 340, 136, 16, { decimals: 0 });
-slider("smear", 322, 358, 343, 20, { decimals: 1, suffix: " ms" });
+const smearSld    = slider("smear", 322, 358, 343, 20, { decimals: 1, suffix: " ms" });
 wireEnableDim("peakSnap", [noiseSld, peakSensSld]);   // Texture/Density active only with Tones Only
+
+// Every spectral-only control (Classic mode uses the Hilbert path and none of these apply).
+// Mode-dimming uses a SEPARATE class (.mode-off) from the enable-dim (.dimmed) so the two
+// sources never fight over the same class on Texture/Density.
+const spectralOnlyCtrls = [pianoEl, quantSld, preserveSld, transSld, sensSld,
+                           peakSnapEl, noiseSld, peakSensSld, smearSld];
 
 // freq modulation  (lfoRate -> tempo divisions when Sync on)
 toggleSwitch("lfoEnabled", 119, 411, 34, 15, "");
 const lfoDepthSld = slider("lfoDepth", 75, 431, 430, 22, { adaptive: true });
-const lfoRateSld = slider("lfoRate", 75, 462, 356, 22, { adaptive: true, suffix: " Hz",
+const lfoRateSld = slider("lfoRate", 75, 462, 356, 22, { adaptive: true, suffix: " Hz", log: true,
   sync: { toggleId: "lfoSync", divisionId: "lfoDivision", reversed: true } });
 const lfoSyncTgl = toggleSwitch("lfoSync", 451, 462, 75, 24, "Sync");
 const lfoShapeCmb = combo("lfoShape", 579, 463, 76, 22);
@@ -370,7 +399,7 @@ decorrelateToggle(582, 631, 110, 18);
 // delay modulation  (dlyLfoRate -> tempo divisions when Sync on)
 toggleSwitch("dlyLfoEnabled", 120, 657, 34, 15, "");
 const dlyDepthSld = slider("dlyLfoDepth", 76, 679, 448, 22, { adaptive: true, suffix: " ms" });
-const dlyRateSld = slider("dlyLfoRate", 76, 709, 356, 22, { adaptive: true, suffix: " Hz",
+const dlyRateSld = slider("dlyLfoRate", 76, 709, 356, 22, { adaptive: true, suffix: " Hz", log: true,
   sync: { toggleId: "dlyLfoSync", divisionId: "dlyLfoDivision", reversed: true } });
 const dlySyncTgl = toggleSwitch("dlyLfoSync", 452, 709, 75, 24, "Sync");
 const dlyShapeCmb = combo("dlyLfoShape", 584, 707, 76, 22);
@@ -393,6 +422,8 @@ function updateMode(idx) {
   panel.classList.toggle("dimmed", classic);
   spectralHdr.classList.toggle("dim", classic);
   specLabels.forEach((l) => l.classList.toggle("dim", classic));
+  // The actual spectral controls sit ON the panel (not inside it), so grey + disable each one.
+  spectralOnlyCtrls.forEach((e) => e && e.classList.toggle("mode-off", classic));
   // mask section
   maskStripEl.style.opacity = classic ? ".5" : "1";
   [maskEnEl, maskModeEl, maskT, maskLo, maskHi, ...maskLabels].forEach((e) => e && e.classList.toggle("dimmed", classic));
